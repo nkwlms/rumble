@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   BOARD_SIZE,
   HAND_SIZE,
@@ -13,11 +13,20 @@ import {
   commitPending,
   getWinnerText,
 } from './gameLogic';
+import { fetchGame, saveGame } from './api';
 import './App.css';
 
 const NUM_PLAYERS = 2;
-
 const COLOR_LABELS = { red: 'Red', blue: 'Blue', green: 'Green', orange: 'Orange' };
+const SCRIPT_URL = import.meta.env.VITE_SCRIPT_URL;
+const POLL_MS = 4000;
+
+function randId(len) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  while (s.length < len) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
 
 function initGame() {
   let bag = createBag();
@@ -38,6 +47,29 @@ function initGame() {
     gameOver: false,
   };
 }
+
+// Strip UI-only fields before syncing to server
+function toSyncState(game) {
+  const { pending, selectedIdx, ...rest } = game;
+  return rest;
+}
+
+// Re-attach UI fields when loading from server
+function fromSyncState(state) {
+  return { ...state, pending: {}, selectedIdx: null };
+}
+
+function playerLabel(idx, myPlayer) {
+  if (myPlayer === null) return `Player ${idx + 1}`;
+  return idx === myPlayer ? 'You' : 'Opponent';
+}
+
+function turnMsg(nextPlayer, myPlayer) {
+  if (myPlayer === null) return `Player ${nextPlayer + 1}'s turn.`;
+  return nextPlayer === myPlayer ? 'Your turn!' : "Opponent's turn — waiting…";
+}
+
+// ── Tile component ────────────────────────────────────────────────────────────
 
 function Tile({ tile, size = 'board', selected = false, onClick, onDragStart }) {
   const colorClass = tile.isWild
@@ -65,23 +97,214 @@ function Tile({ tile, size = 'board', selected = false, onClick, onDragStart }) 
   );
 }
 
+// ── Lobby screen ──────────────────────────────────────────────────────────────
+
+function Lobby({ onNew, onJoin, onLocal, syncing }) {
+  const [joinInput, setJoinInput] = useState('');
+  return (
+    <div className="app lobby">
+      <h1 className="title">RUMBLE</h1>
+      <div className="lobby-card">
+        {SCRIPT_URL ? (
+          <>
+            <button className="btn btn--play lobby-btn" onClick={onNew} disabled={syncing}>
+              {syncing ? 'Creating…' : '+ New Online Game'}
+            </button>
+            <div className="lobby-divider">or join existing</div>
+            <div className="lobby-join">
+              <input
+                className="lobby-input"
+                placeholder="Game ID (e.g. AB3K9Z)"
+                value={joinInput}
+                onChange={e => setJoinInput(e.target.value.toUpperCase())}
+                onKeyDown={e => e.key === 'Enter' && joinInput && onJoin(joinInput)}
+                maxLength={8}
+              />
+              <button
+                className="btn btn--recall"
+                onClick={() => onJoin(joinInput)}
+                disabled={!joinInput || syncing}
+              >
+                Join
+              </button>
+            </div>
+            <div className="lobby-divider">or</div>
+          </>
+        ) : (
+          <div className="lobby-no-backend">
+            Set VITE_SCRIPT_URL to enable online play.
+          </div>
+        )}
+        <button className="btn btn--new lobby-btn" onClick={onLocal}>
+          Play Locally (same device)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+
 export default function App() {
-  const [game, setGame] = useState(initGame);
+  const urlGameId = new URLSearchParams(window.location.search).get('game');
+
+  const [mode, setMode] = useState(() => {
+    if (urlGameId) return 'loading';
+    if (!SCRIPT_URL) return 'local';
+    return 'lobby';
+  });
+
+  const [game, setGame] = useState(() => {
+    if (urlGameId || SCRIPT_URL) return null;
+    return initGame();
+  });
+
+  const [gameId, setGameId]     = useState(urlGameId);
+  const [myPlayer, setMyPlayer] = useState(null);
+  const [syncing, setSyncing]   = useState(false);
+  const [syncError, setSyncError] = useState(false);
+  const [copyDone, setCopyDone] = useState(false);
+
   const [showRules, setShowRules] = useState(false);
   const [wildPicker, setWildPicker] = useState(null);
-  const [showBag, setShowBag] = useState(false);
-  const [dragOver, setDragOver] = useState(null); // "r,c" key of hovered cell
-  const dragIdx = useRef(null); // rack index being dragged
+  const [showBag, setShowBag]   = useState(false);
+  const [dragOver, setDragOver] = useState(null);
+  const dragIdx = useRef(null);
 
-  const rack = game.players[game.currentPlayer].rack;
-  const displayBoard = game.board.map((row, r) =>
-    row.map((cell, c) => game.pending[`${r},${c}`] ?? cell)
-  );
+  // Load online game from URL param on mount
+  useEffect(() => {
+    if (urlGameId) loadOnlineGame(urlGameId);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Placement helper ─────────────────────────────────────────────────────────
+  // Poll for updates when it's opponent's turn or waiting for them to join
+  useEffect(() => {
+    if (mode !== 'online' || !gameId || !game) return;
+    if (game.gameOver) return;
+    const needsPoll = game.status === 'waiting' || game.currentPlayer !== myPlayer;
+    if (!needsPoll) return;
+
+    const id = setInterval(async () => {
+      try {
+        const state = await fetchGame(gameId);
+        setSyncError(false);
+        const changed =
+          state.currentPlayer !== game.currentPlayer ||
+          state.status !== game.status ||
+          state.gameOver !== game.gameOver;
+        if (changed) setGame(fromSyncState(state));
+      } catch {
+        setSyncError(true);
+      }
+    }, POLL_MS);
+
+    return () => clearInterval(id);
+  }, [mode, gameId, game?.currentPlayer, game?.status, game?.gameOver, myPlayer]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Online helpers ──────────────────────────────────────────────────────────
+
+  async function loadOnlineGame(id) {
+    try {
+      const state = await fetchGame(id);
+      if (state.error) { setMode('lobby'); return; }
+      let player = null;
+      const stored = localStorage.getItem(`rumble_${id}`);
+      if (stored) {
+        const { player: p, secret } = JSON.parse(stored);
+        if (state.secrets?.[p] === secret) player = p;
+      }
+      setMyPlayer(player);
+      setGame(fromSyncState(state));
+      setGameId(id);
+      setMode('online');
+    } catch {
+      setMode('lobby');
+    }
+  }
+
+  async function createNewGame() {
+    setSyncing(true);
+    try {
+      const id = randId(6);
+      const secret = randId(16);
+      const base = initGame();
+      const state = { ...toSyncState(base), secrets: [secret, null], status: 'waiting' };
+      await saveGame(id, state);
+      localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 0, secret }));
+      window.history.pushState(null, '', `?game=${id}`);
+      setGameId(id);
+      setMyPlayer(0);
+      setGame(fromSyncState(state));
+      setMode('online');
+    } catch {
+      alert('Failed to create game. Check your VITE_SCRIPT_URL.');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function joinOnlineGame(id) {
+    setSyncing(true);
+    try {
+      const state = await fetchGame(id);
+      if (state.error === 'not_found') { alert(`Game "${id}" not found.`); return; }
+      if (state.secrets?.[1] !== null) { alert('This game already has two players.'); return; }
+      const secret = randId(16);
+      const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active' };
+      await saveGame(id, newState);
+      localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 1, secret }));
+      window.history.pushState(null, '', `?game=${id}`);
+      setGameId(id);
+      setMyPlayer(1);
+      setGame(fromSyncState(newState));
+      setMode('online');
+    } catch {
+      alert('Failed to join game. Check the game ID and try again.');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  function syncGame(newGame) {
+    if (mode !== 'online' || !gameId) return;
+    setSyncing(true);
+    setSyncError(false);
+    saveGame(gameId, toSyncState(newGame))
+      .then(() => setSyncError(false))
+      .catch(() => setSyncError(true))
+      .finally(() => setSyncing(false));
+  }
+
+  function startLocal() {
+    window.history.pushState(null, '', window.location.pathname);
+    setGameId(null);
+    setMyPlayer(null);
+    setGame(initGame());
+    setMode('local');
+  }
+
+  function goLobby() {
+    window.history.pushState(null, '', window.location.pathname);
+    setMode('lobby');
+    setGame(null);
+    setGameId(null);
+    setMyPlayer(null);
+    setWildPicker(null);
+    setShowBag(false);
+  }
+
+  function copyShareLink() {
+    const url = `${window.location.origin}${window.location.pathname}?game=${gameId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopyDone(true);
+      setTimeout(() => setCopyDone(false), 2000);
+    });
+  }
+
+  // ── Placement helper ────────────────────────────────────────────────────────
 
   function placeTile(r, c, rackIdx) {
-    if (game.gameOver) return;
+    if (!game || game.gameOver) return;
+    if (mode === 'online' && game.currentPlayer !== myPlayer) return;
     const key = `${r},${c}`;
     if (game.board[r][c]) return;
     const tile = game.players[game.currentPlayer].rack[rackIdx];
@@ -105,17 +328,15 @@ export default function App() {
     }));
   }
 
-  // ── Rack ─────────────────────────────────────────────────────────────────────
-
   function selectRackTile(idx) {
-    if (game.gameOver) return;
+    if (!game || game.gameOver) return;
+    if (mode === 'online' && game.currentPlayer !== myPlayer) return;
     setGame(g => ({ ...g, selectedIdx: g.selectedIdx === idx ? null : idx }));
   }
 
-  // ── Board click ──────────────────────────────────────────────────────────────
-
   function clickCell(r, c) {
-    if (game.gameOver) return;
+    if (!game || game.gameOver) return;
+    if (mode === 'online' && game.currentPlayer !== myPlayer) return;
     const key = `${r},${c}`;
 
     if (game.pending[key]) {
@@ -137,16 +358,14 @@ export default function App() {
     }
 
     if (game.board[r][c]) return;
-
     if (game.selectedIdx === null) {
       setGame(g => ({ ...g, message: 'Select a tile from your rack first!' }));
       return;
     }
-
     placeTile(r, c, game.selectedIdx);
   }
 
-  // ── Drag & drop ──────────────────────────────────────────────────────────────
+  // ── Drag & drop ─────────────────────────────────────────────────────────────
 
   function handleDragStart(e, rackIdx) {
     dragIdx.current = rackIdx;
@@ -161,9 +380,7 @@ export default function App() {
     setDragOver(key);
   }
 
-  function handleDragLeave() {
-    setDragOver(null);
-  }
+  function handleDragLeave() { setDragOver(null); }
 
   function handleDrop(e, r, c) {
     e.preventDefault();
@@ -176,7 +393,7 @@ export default function App() {
     placeTile(r, c, src);
   }
 
-  // ── Wildcard picker ──────────────────────────────────────────────────────────
+  // ── Wildcard picker ─────────────────────────────────────────────────────────
 
   function pickWildColor(color) {
     setWildPicker(wp => ({ ...wp, step: 'value', chosenColor: color }));
@@ -204,44 +421,54 @@ export default function App() {
     setGame(g => ({ ...g, selectedIdx: null }));
   }
 
-  // ── Play ─────────────────────────────────────────────────────────────────────
+  // ── Play ────────────────────────────────────────────────────────────────────
 
   function play() {
-    setGame(g => {
-      if (Object.keys(g.pending).length === 0)
-        return { ...g, message: 'Place at least one tile before pressing Play!' };
+    if (!game || game.gameOver) return;
+    if (mode === 'online' && game.currentPlayer !== myPlayer) return;
 
-      const result = validatePlacement(g.board, g.pending);
-      if (!result.valid) return { ...g, message: `❌ ${result.reason}` };
+    if (Object.keys(game.pending).length === 0) {
+      setGame(g => ({ ...g, message: 'Place at least one tile before pressing Play!' }));
+      return;
+    }
 
-      const points = scorePlacement(g.board, g.pending);
-      const newBoard = commitPending(g.board, g.pending);
-      const { drawn, newBag } = drawTiles(g.bag, Object.keys(g.pending).length);
-      const newRack = [...g.players[g.currentPlayer].rack, ...drawn];
+    const result = validatePlacement(game.board, game.pending);
+    if (!result.valid) {
+      setGame(g => ({ ...g, message: `❌ ${result.reason}` }));
+      return;
+    }
 
-      const newPlayers = g.players.map((p, i) =>
-        i === g.currentPlayer ? { ...p, score: p.score + points, rack: newRack } : p
-      );
-      const nextPlayer = (g.currentPlayer + 1) % NUM_PLAYERS;
-      const gameOver = newBag.length === 0 && newRack.length === 0;
+    const points = scorePlacement(game.board, game.pending);
+    const newBoard = commitPending(game.board, game.pending);
+    const { drawn, newBag } = drawTiles(game.bag, Object.keys(game.pending).length);
+    const newRack = [...game.players[game.currentPlayer].rack, ...drawn];
 
-      return {
-        ...g,
-        board: newBoard,
-        bag: newBag,
-        players: newPlayers,
-        currentPlayer: nextPlayer,
-        pending: {},
-        selectedIdx: null,
-        gameOver,
-        message: gameOver
-          ? `🏆 Game over! ${getWinnerText(newPlayers)}`
-          : `✅ +${points} pts! Player ${nextPlayer + 1}'s turn.`,
-      };
-    });
+    const newPlayers = game.players.map((p, i) =>
+      i === game.currentPlayer ? { ...p, score: p.score + points, rack: newRack } : p
+    );
+    const nextPlayer = (game.currentPlayer + 1) % NUM_PLAYERS;
+    const gameOver = newBag.length === 0 && newRack.length === 0;
+
+    const newGame = {
+      ...game,
+      board: newBoard,
+      bag: newBag,
+      players: newPlayers,
+      currentPlayer: nextPlayer,
+      pending: {},
+      selectedIdx: null,
+      gameOver,
+      message: gameOver
+        ? `🏆 Game over! ${getWinnerText(newPlayers)}`
+        : `✅ +${points} pts! ${turnMsg(nextPlayer, myPlayer)}`,
+    };
+
+    setGame(newGame);
+    syncGame(newGame);
   }
 
   function recallAll() {
+    if (!game) return;
     setGame(g => {
       const recalled = Object.values(g.pending).map(t => ({ ...t, chosen: null, chosenColor: null }));
       if (recalled.length === 0) return g;
@@ -258,37 +485,53 @@ export default function App() {
   }
 
   function pass() {
-    setGame(g => {
-      const recalled = Object.values(g.pending).map(t => ({ ...t, chosen: null, chosenColor: null }));
-      const fullRack = [...g.players[g.currentPlayer].rack, ...recalled];
-      const newBagPool = shuffle([...g.bag, ...fullRack]);
-      const { drawn, newBag } = drawTiles(newBagPool, HAND_SIZE);
-      const nextPlayer = (g.currentPlayer + 1) % NUM_PLAYERS;
-      return {
-        ...g,
-        bag: newBag,
-        players: g.players.map((p, i) =>
-          i === g.currentPlayer ? { ...p, rack: drawn } : p
-        ),
-        currentPlayer: nextPlayer,
-        pending: {},
-        selectedIdx: null,
-        message: `Player ${g.currentPlayer + 1} passed. Player ${nextPlayer + 1}'s turn.`,
-      };
-    });
+    if (!game || game.gameOver) return;
+    if (mode === 'online' && game.currentPlayer !== myPlayer) return;
+
+    const recalled = Object.values(game.pending).map(t => ({ ...t, chosen: null, chosenColor: null }));
+    const fullRack = [...game.players[game.currentPlayer].rack, ...recalled];
+    const newBagPool = shuffle([...game.bag, ...fullRack]);
+    const { drawn, newBag } = drawTiles(newBagPool, HAND_SIZE);
+    const nextPlayer = (game.currentPlayer + 1) % NUM_PLAYERS;
+
+    const newGame = {
+      ...game,
+      bag: newBag,
+      players: game.players.map((p, i) =>
+        i === game.currentPlayer ? { ...p, rack: drawn } : p
+      ),
+      currentPlayer: nextPlayer,
+      pending: {},
+      selectedIdx: null,
+      message: `${playerLabel(game.currentPlayer, myPlayer)} passed. ${turnMsg(nextPlayer, myPlayer)}`,
+    };
+
+    setGame(newGame);
+    syncGame(newGame);
   }
 
-  // ── Score preview ─────────────────────────────────────────────────────────────
+  function newGame() {
+    setWildPicker(null);
+    setShowBag(false);
+    if (mode === 'online') {
+      goLobby();
+    } else {
+      setGame(initGame());
+    }
+  }
+
+  // ── Score preview ───────────────────────────────────────────────────────────
 
   const previewScore = (() => {
-    if (game.gameOver || Object.keys(game.pending).length === 0) return null;
+    if (!game || game.gameOver || Object.keys(game.pending).length === 0) return null;
     if (!validatePlacement(game.board, game.pending).valid) return null;
     return scorePlacement(game.board, game.pending);
   })();
 
-  // ── Bag summary ──────────────────────────────────────────────────────────────
+  // ── Bag summary ─────────────────────────────────────────────────────────────
 
   const bagGroups = (() => {
+    if (!game) return null;
     const groups = { wild: 0 };
     for (const c of COLORS) groups[c] = {};
     for (const t of game.bag) {
@@ -298,13 +541,60 @@ export default function App() {
     return groups;
   })();
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render: Lobby ───────────────────────────────────────────────────────────
+
+  if (mode === 'lobby') {
+    return (
+      <Lobby
+        onNew={createNewGame}
+        onJoin={joinOnlineGame}
+        onLocal={startLocal}
+        syncing={syncing}
+      />
+    );
+  }
+
+  // ── Render: Loading ─────────────────────────────────────────────────────────
+
+  if (mode === 'loading' || !game) {
+    return (
+      <div className="app lobby">
+        <h1 className="title">RUMBLE</h1>
+        <div className="lobby-card">
+          <div className="loading-msg">Loading game…</div>
+        </div>
+      </div>
+    );
+  }
+
+  const isMyTurn = mode !== 'online' || game.currentPlayer === myPlayer;
+  const rack = game.players[game.currentPlayer].rack;
+  const displayBoard = game.board.map((row, r) =>
+    row.map((cell, c) => game.pending[`${r},${c}`] ?? cell)
+  );
+
+  // ── Render: Game ────────────────────────────────────────────────────────────
 
   return (
     <div className="app">
 
+      {/* Waiting for opponent to join overlay */}
+      {mode === 'online' && game.status === 'waiting' && (
+        <div className="wild-overlay">
+          <div className="wild-picker share-box">
+            <div className="wild-picker__title">Waiting for opponent…</div>
+            <div className="share-instructions">Share this Game ID or link:</div>
+            <div className="share-id">{gameId}</div>
+            <button className="btn btn--recall" onClick={copyShareLink}>
+              {copyDone ? '✓ Copied!' : 'Copy Invite Link'}
+            </button>
+            <button className="wild-picker__cancel" onClick={goLobby}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {/* Bag viewer overlay */}
-      {showBag && (
+      {showBag && bagGroups && (
         <div className="wild-overlay" onClick={() => setShowBag(false)}>
           <div className="bag-modal" onClick={e => e.stopPropagation()}>
             <div className="bag-modal__title">Bag · {game.bag.length} tiles remaining</div>
@@ -386,88 +676,117 @@ export default function App() {
 
       <aside className="sidebar">
 
-      <header className="header">
-        <h1 className="title">RUMBLE</h1>
-        <button className="rules-btn" onClick={() => setShowRules(v => !v)}>
-          {showRules ? 'Hide Rules' : '? How to Play'}
-        </button>
-      </header>
+        <header className="header">
+          <h1 className="title">RUMBLE</h1>
+          <button className="rules-btn" onClick={() => setShowRules(v => !v)}>
+            {showRules ? 'Hide Rules' : '? How to Play'}
+          </button>
+        </header>
 
-      {showRules && (
-        <div className="rules-panel">
-          <h3>How to Play</h3>
-          <ul>
-            <li><strong>Select</strong> a tile (or drag it) then <strong>click or drop</strong> onto a cell. Click a placed orange tile to recall it.</li>
-            <li>
-              Valid plays:
-              <ul>
-                <li><strong>Run</strong> — same color, consecutive numbers (e.g. <span className="c-red ex">R3</span> <span className="c-red ex">R4</span> <span className="c-red ex">R5</span>)</li>
-                <li><strong>Set</strong> — same number, any color (e.g. <span className="c-red ex">R6</span> <span className="c-blue ex">B6</span>)</li>
-              </ul>
-            </li>
-            <li>All tiles in one turn must share a <strong>row or column</strong> and connect to the board or cover a <strong>★ star</strong>.</li>
-            <li><strong>Wildcards (★)</strong> — pick a color and value when placed. They score 0 but bridge runs or fill sets. Placed wilds show a gold ★ mark.</li>
-            <li><span className="rule-dn">2N</span> doubles that tile's value · <span className="rule-dw">2W</span> doubles the whole word — only for newly placed tiles.</li>
-            <li><strong>Pass</strong> exchanges your whole rack and skips your turn. Click the <strong>Bag</strong> count to see what's left.</li>
-          </ul>
-        </div>
-      )}
-
-      <div className="scoreboard">
-        {game.players.map((p, i) => (
-          <div
-            key={i}
-            className={`score-card${i === game.currentPlayer && !game.gameOver ? ' score-card--active' : ''}`}
-          >
-            <div className="score-card__label">Player {i + 1}</div>
-            <div className="score-card__value">{p.score}</div>
+        {/* Online: game ID + sync status */}
+        {mode === 'online' && gameId && (
+          <div className="game-id-bar">
+            <span>Game: <strong>{gameId}</strong></span>
+            <span
+              className={`sync-dot sync-dot--${syncing ? 'busy' : syncError ? 'err' : 'ok'}`}
+              title={syncing ? 'Saving…' : syncError ? 'Sync error' : 'Synced'}
+            />
           </div>
-        ))}
-        <div className="bag-card" onClick={() => setShowBag(true)} title="Click to see bag contents">
-          <div className="bag-card__label">Bag</div>
-          <div className="bag-card__value">{game.bag.length}</div>
-        </div>
-      </div>
+        )}
 
-      <div className={`message${game.gameOver ? ' message--game-over' : ''}`}>
-        {game.message}
-      </div>
-
-      <div className="controls">
-        <div className="rack-area">
-          <div className="rack-label">
-            Player {game.currentPlayer + 1}'s Rack
-            {Object.keys(game.pending).length > 0 && (
-              <span className="pending-count"> · {Object.keys(game.pending).length} on board</span>
-            )}
+        {showRules && (
+          <div className="rules-panel">
+            <h3>How to Play</h3>
+            <ul>
+              <li><strong>Select</strong> a tile (or drag it) then <strong>click or drop</strong> onto a cell. Click a placed orange tile to recall it.</li>
+              <li>
+                Valid plays:
+                <ul>
+                  <li><strong>Run</strong> — same color, consecutive numbers (e.g. <span className="c-red ex">R3</span> <span className="c-red ex">R4</span> <span className="c-red ex">R5</span>)</li>
+                  <li><strong>Set</strong> — same number, any color (e.g. <span className="c-red ex">R6</span> <span className="c-blue ex">B6</span>)</li>
+                </ul>
+              </li>
+              <li>All tiles in one turn must share a <strong>row or column</strong> and connect to the board or cover a <strong>★ star</strong>.</li>
+              <li><strong>Wildcards (★)</strong> — pick a color and value when placed. They score 0 but bridge runs or fill sets. Placed wilds show a gold ★ mark.</li>
+              <li><span className="rule-dn">2N</span> doubles that tile's value · <span className="rule-dw">2W</span> doubles the whole word — only for newly placed tiles.</li>
+              <li><strong>Pass</strong> exchanges your whole rack and skips your turn. Click the <strong>Bag</strong> count to see what's left.</li>
+            </ul>
           </div>
-          <div className="rack">
-            {rack.map((tile, i) => (
-              <Tile
-                key={tile.id}
-                tile={tile}
-                size="rack"
-                selected={game.selectedIdx === i}
-                onClick={() => selectRackTile(i)}
-                onDragStart={(e) => handleDragStart(e, i)}
-              />
-            ))}
-            {rack.length === 0 && !game.gameOver && (
-              <span className="rack-empty">— empty —</span>
-            )}
+        )}
+
+        <div className="scoreboard">
+          {game.players.map((p, i) => (
+            <div
+              key={i}
+              className={`score-card${i === game.currentPlayer && !game.gameOver ? ' score-card--active' : ''}`}
+            >
+              <div className="score-card__label">{playerLabel(i, myPlayer)}</div>
+              <div className="score-card__value">{p.score}</div>
+            </div>
+          ))}
+          <div className="bag-card" onClick={() => setShowBag(true)} title="Click to see bag contents">
+            <div className="bag-card__label">Bag</div>
+            <div className="bag-card__value">{game.bag.length}</div>
           </div>
         </div>
-          {previewScore !== null && (
-            <div className="score-preview">+{previewScore} pts</div>
+
+        <div className={`message${game.gameOver ? ' message--game-over' : ''}`}>
+          {game.message}
+        </div>
+
+        <div className="controls">
+          {isMyTurn ? (
+            <>
+              <div className="rack-area">
+                <div className="rack-label">
+                  {mode === 'online' ? 'Your Rack' : `Player ${game.currentPlayer + 1}'s Rack`}
+                  {Object.keys(game.pending).length > 0 && (
+                    <span className="pending-count"> · {Object.keys(game.pending).length} on board</span>
+                  )}
+                </div>
+                <div className="rack">
+                  {rack.map((tile, i) => (
+                    <Tile
+                      key={tile.id}
+                      tile={tile}
+                      size="rack"
+                      selected={game.selectedIdx === i}
+                      onClick={() => selectRackTile(i)}
+                      onDragStart={(e) => handleDragStart(e, i)}
+                    />
+                  ))}
+                  {rack.length === 0 && !game.gameOver && (
+                    <span className="rack-empty">— empty —</span>
+                  )}
+                </div>
+              </div>
+              {previewScore !== null && (
+                <div className="score-preview">+{previewScore} pts</div>
+              )}
+              <button className="btn btn--play" onClick={play} disabled={game.gameOver || syncing}>▶ Play</button>
+            </>
+          ) : (
+            <div className="rack-area opponent-wait">
+              <div className="rack-label">
+                {myPlayer !== null ? "Opponent's turn" : `Player ${game.currentPlayer + 1}'s turn`}
+              </div>
+              <div className="wait-dots"><span /><span /><span /></div>
+              {syncError && <div className="sync-err-msg">Connection issue — retrying…</div>}
+            </div>
           )}
-          <button className="btn btn--play"   onClick={play}      disabled={game.gameOver}>▶ Play</button>
 
-        <div className="buttons">
-          <button className="btn btn--recall" onClick={recallAll} disabled={game.gameOver}>↩ Recall</button>
-          <button className="btn btn--pass"   onClick={pass}      disabled={game.gameOver}>⏭ Pass</button>
-          <button className="btn btn--new"    onClick={() => { setWildPicker(null); setShowBag(false); setGame(initGame()); }}>↺ New Game</button>
+          <div className="buttons">
+            {isMyTurn && (
+              <button className="btn btn--recall" onClick={recallAll} disabled={game.gameOver}>↩ Recall</button>
+            )}
+            {isMyTurn && (
+              <button className="btn btn--pass" onClick={pass} disabled={game.gameOver || syncing}>⏭ Pass</button>
+            )}
+            <button className="btn btn--new" onClick={newGame}>
+              {mode === 'online' ? '← Lobby' : '↺ New Game'}
+            </button>
+          </div>
         </div>
-      </div>
 
       </aside>
 
