@@ -12,7 +12,7 @@ export async function saveGame(gameId, state) {
     `${SCRIPT_URL}?action=save` +
     `&gameId=${encodeURIComponent(gameId)}` +
     `&state=${encodeURIComponent(JSON.stringify(state))}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  // no-cors avoids the CORS error on Apps Script's redirect response.
+  // The save reaches the server (data lands in the sheet) — we just can't read the reply.
+  await fetch(url, { mode: 'no-cors' });
 }
