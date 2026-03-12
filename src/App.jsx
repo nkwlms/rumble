@@ -206,13 +206,35 @@ export default function App() {
     try {
       const state = await fetchGame(id);
       if (state.error) { setMode('lobby'); return; }
-      let player = null;
+
+      // Check if we're already a registered player
       const stored = localStorage.getItem(`rumble_${id}`);
       if (stored) {
         const { player: p, secret } = JSON.parse(stored);
-        if (state.secrets?.[p] === secret) player = p;
+        if (state.secrets?.[p] === secret) {
+          setMyPlayer(p);
+          setGame(fromSyncState(state));
+          setGameId(id);
+          setMode('online');
+          return;
+        }
       }
-      setMyPlayer(player);
+
+      // Auto-join as player 2 if the slot is still open
+      if (state.status === 'waiting' && state.secrets?.[1] === null) {
+        const secret = randId(16);
+        const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active' };
+        await saveGame(id, newState);
+        localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 1, secret }));
+        setMyPlayer(1);
+        setGame(fromSyncState(newState));
+        setGameId(id);
+        setMode('online');
+        return;
+      }
+
+      // Spectator / game already full
+      setMyPlayer(null);
       setGame(fromSyncState(state));
       setGameId(id);
       setMode('online');
