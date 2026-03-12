@@ -1,4 +1,4 @@
-const SCRIPT_URL = import.meta.env.VITE_SCRIPT_URL;
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxK_C0u3wfpHawR_HeCcYME3sT0OWL95DTy0ZbFOoxzvsH-4LdUKFlHlLGQF92SBorxbw/exec';
 
 export async function fetchGame(gameId) {
   const url = `${SCRIPT_URL}?action=get&gameId=${encodeURIComponent(gameId)}`;

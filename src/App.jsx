@@ -18,7 +18,7 @@ import './App.css';
 
 const NUM_PLAYERS = 2;
 const COLOR_LABELS = { red: 'Red', blue: 'Blue', green: 'Green', orange: 'Orange' };
-const SCRIPT_URL = import.meta.env.VITE_SCRIPT_URL;
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxK_C0u3wfpHawR_HeCcYME3sT0OWL95DTy0ZbFOoxzvsH-4LdUKFlHlLGQF92SBorxbw/exec';
 const POLL_MS = 4000;
 
 function randId(len) {
