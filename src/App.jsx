@@ -401,7 +401,9 @@ export default function App() {
   }, [mode, game?.currentPlayer, game?.gameOver, myPlayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-join when arriving via share link and name is already set
+  // Skip for WebGate users (mobile non-standalone) — they can't play yet
   useEffect(() => {
+    if (isMobile && !isStandalone) return;
     if (mode === 'join-prompt' && !showNameGate && gameId) {
       setMode('loading');
       loadOnlineGame(gameId);
