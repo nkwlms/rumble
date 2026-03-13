@@ -25,9 +25,11 @@ export const PREMIUM = {};
 export function createBag() {
   const bag = [];
   let id = 0;
+  // Linear distribution: 1 appears most (7×), 7 appears least (1×)
+  // Per color: 7+6+5+4+3+2+1 = 28 × 2 colors = 56 number tiles + 4 wildcards = 60 total
   for (const color of COLORS) {
     for (let val = 1; val <= 7; val++) {
-      for (let copy = 0; copy < 3; copy++) {
+      for (let copy = 0; copy < (8 - val); copy++) {
         bag.push({ value: val, color, id: `tile-${id++}`, isWild: false });
       }
     }

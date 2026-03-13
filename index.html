@@ -2,12 +2,33 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>rumble</title>
+    <title>Rumble</title>
+
+    <!-- PWA manifest -->
+    <link rel="manifest" href="/rumble/manifest.json" />
+
+    <!-- iOS / Safari PWA meta tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Rumble" />
+    <link rel="apple-touch-icon" href="/rumble/icon-192.png" />
+
+    <!-- Theme color for browser chrome -->
+    <meta name="theme-color" content="#0a1628" />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="/rumble/icon-192.png" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/rumble/sw.js');
+        });
+      }
+    </script>
   </body>
 </html>

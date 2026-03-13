@@ -45,6 +45,8 @@ function initGame() {
     selectedIdx: null,
     message: "Player 1's turn — select a tile then click the board.",
     gameOver: false,
+    consecutivePasses: 0,
+    lastMove: [],
   };
 }
 
@@ -103,21 +105,55 @@ function Tile({ tile, size = 'board', selected = false, onClick, onDragStart }) 
   );
 }
 
+// ── Install banner ────────────────────────────────────────────────────────────
+
+function InstallBanner({ isIOS, onInstall, onDismiss }) {
+  return (
+    <div className="install-banner">
+      <div className="install-banner__icon">📲</div>
+      <div className="install-banner__text">
+        {isIOS
+          ? <>Tap <strong>Share</strong> → <strong>Add to Home Screen</strong> to install Rumble</>
+          : <>Add Rumble to your home screen for the best experience</>
+        }
+      </div>
+      {isIOS
+        ? <button className="install-banner__dismiss" onClick={onDismiss}>✕</button>
+        : <>
+            <button className="install-banner__btn" onClick={onInstall}>Add</button>
+            <button className="install-banner__dismiss" onClick={onDismiss}>✕</button>
+          </>
+      }
+    </div>
+  );
+}
+
 // ── Lobby screen ──────────────────────────────────────────────────────────────
 
 function Lobby({ onNew, onJoin, onLocal, syncing, name, onNameChange, activeGames, onResume }) {
   const [joinInput, setJoinInput] = useState('');
+  const [editingName, setEditingName] = useState(!name);
   return (
     <div className="app lobby">
       <h1 className="title">RUMBLE</h1>
       <div className="lobby-card">
-        <input
-          className="lobby-input lobby-name-input"
-          placeholder="Your name"
-          value={name}
-          onChange={e => onNameChange(e.target.value)}
-          maxLength={20}
-        />
+        {editingName ? (
+          <input
+            className="lobby-input lobby-name-input"
+            placeholder="Your name"
+            value={name}
+            onChange={e => onNameChange(e.target.value)}
+            maxLength={20}
+            autoFocus
+            onBlur={() => { if (name) setEditingName(false); }}
+            onKeyDown={e => { if (e.key === 'Enter' && name) setEditingName(false); }}
+          />
+        ) : (
+          <div className="lobby-playing-as">
+            Playing as <strong>{name}</strong>
+            <button className="lobby-edit-name" onClick={() => setEditingName(true)}>Edit</button>
+          </div>
+        )}
         {SCRIPT_URL ? (
           <>
             <button className="btn btn--play lobby-btn" onClick={onNew} disabled={syncing}>
@@ -222,6 +258,50 @@ export default function App() {
   const [dragOver, setDragOver] = useState(null);
   const dragIdx = useRef(null);
   const [activeGames, setActiveGames] = useState(null);
+
+  // ── PWA install prompt ──────────────────────────────────────────────────────
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.navigator.standalone;
+  const installDismissed = localStorage.getItem('rumble_install_dismissed') === '1';
+
+  useEffect(() => {
+    if (isStandalone || installDismissed) return;
+    const handler = e => { e.preventDefault(); setInstallPrompt(e); };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (isStandalone || installDismissed) return;
+    if (installPrompt || isIOS) {
+      const t = setTimeout(() => setShowInstallBanner(true), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [installPrompt, isIOS]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function dismissInstall() {
+    setShowInstallBanner(false);
+    localStorage.setItem('rumble_install_dismissed', '1');
+  }
+
+  async function triggerInstall() {
+    if (installPrompt) {
+      installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice;
+      if (outcome === 'accepted') setInstallPrompt(null);
+    }
+    dismissInstall();
+  }
+
+  // ── App badge (shows when it's your turn in an online game) ────────────────
+  useEffect(() => {
+    if (!('setAppBadge' in navigator)) return;
+    const myTurn = mode === 'online' && game && !game.gameOver && game.currentPlayer === myPlayer;
+    if (myTurn) navigator.setAppBadge(1).catch(() => {});
+    else navigator.clearAppBadge().catch(() => {});
+  }, [mode, game?.currentPlayer, game?.gameOver, myPlayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // (join-prompt handles the URL game load after name entry)
 
@@ -550,6 +630,8 @@ export default function App() {
       currentPlayer: nextPlayer,
       pending: {},
       selectedIdx: null,
+      consecutivePasses: 0,
+      lastMove: Object.keys(game.pending),
       gameOver,
       message: gameOver
         ? `🏆 Game over! ${getWinnerText(newPlayers)}`
@@ -586,17 +668,26 @@ export default function App() {
     const newBagPool = shuffle([...game.bag, ...fullRack]);
     const { drawn, newBag } = drawTiles(newBagPool, HAND_SIZE);
     const nextPlayer = (game.currentPlayer + 1) % NUM_PLAYERS;
+    const nextConsecutivePasses = (game.consecutivePasses || 0) + 1;
+    const gameOver = nextConsecutivePasses >= NUM_PLAYERS;
+
+    const newPlayers = game.players.map((p, i) =>
+      i === game.currentPlayer ? { ...p, rack: drawn } : p
+    );
 
     const newGame = {
       ...game,
       bag: newBag,
-      players: game.players.map((p, i) =>
-        i === game.currentPlayer ? { ...p, rack: drawn } : p
-      ),
+      players: newPlayers,
       currentPlayer: nextPlayer,
       pending: {},
       selectedIdx: null,
-      message: `${playerLabel(game.currentPlayer, myPlayer, game.names)} passed. ${turnMsg(nextPlayer, myPlayer, game.names)}`,
+      consecutivePasses: nextConsecutivePasses,
+      lastMove: [],
+      gameOver,
+      message: gameOver
+        ? `🏆 Game over! ${getWinnerText(newPlayers)}`
+        : `${playerLabel(game.currentPlayer, myPlayer, game.names)} passed. ${turnMsg(nextPlayer, myPlayer, game.names)}`,
     };
 
     setGame(newGame);
@@ -675,16 +766,19 @@ export default function App() {
 
   if (mode === 'lobby') {
     return (
-      <Lobby
-        onNew={createNewGame}
-        onJoin={joinOnlineGame}
-        onLocal={startLocal}
-        syncing={syncing}
-        name={myName}
-        onNameChange={saveName}
-        activeGames={activeGames}
-        onResume={id => { window.location.assign(`${window.location.pathname}?game=${id}`); }}
-      />
+      <>
+        <Lobby
+          onNew={createNewGame}
+          onJoin={joinOnlineGame}
+          onLocal={startLocal}
+          syncing={syncing}
+          name={myName}
+          onNameChange={saveName}
+          activeGames={activeGames}
+          onResume={id => { window.location.assign(`${window.location.pathname}?game=${id}`); }}
+        />
+        {showInstallBanner && <InstallBanner isIOS={isIOS} onInstall={triggerInstall} onDismiss={dismissInstall} />}
+      </>
     );
   }
 
@@ -703,6 +797,8 @@ export default function App() {
 
   const isMyTurn = mode !== 'online' || game.currentPlayer === myPlayer;
   const rack = game.players[game.currentPlayer].rack;
+  const myRack = (mode === 'online' && myPlayer !== null) ? game.players[myPlayer].rack : rack;
+  const lastMoveSet = new Set(game.lastMove || []);
   const displayBoard = game.board.map((row, r) =>
     row.map((cell, c) => game.pending[`${r},${c}`] ?? cell)
   );
@@ -710,6 +806,7 @@ export default function App() {
   // ── Render: Game ────────────────────────────────────────────────────────────
 
   return (
+    <>
     <div className="app">
 
       {/* Waiting for opponent to join overlay */}
@@ -858,15 +955,15 @@ export default function App() {
               <div className="score-card__value">{p.score}</div>
             </div>
           ))}
-          <div className="bag-card" onClick={() => setShowBag(true)} title="Click to see bag contents">
-            <div className="bag-card__label">Bag</div>
-            <div className="bag-card__value">{game.bag.length}</div>
-          </div>
         </div>
 
         <div className={`message${game.gameOver ? ' message--game-over' : ''}`}>
           {game.message}
         </div>
+
+        <button className="bag-pill" onClick={() => setShowBag(true)}>
+          🎒 {game.bag.length} tile{game.bag.length !== 1 ? 's' : ''} in bag
+        </button>
 
         <div className="controls">
           {isMyTurn ? (
@@ -894,12 +991,18 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <div className="rack-area opponent-wait">
-              <div className="rack-label">
-                {playerLabel(game.currentPlayer, myPlayer, game.names)}'s turn
+            <div className="rack-area rack-area--waiting">
+              <div className="rack-wait-overlay">
+                <div className="rack-label">{playerLabel(game.currentPlayer, myPlayer, game.names)}'s turn</div>
+                <div className="wait-dots"><span /><span /><span /></div>
+                {syncError && <div className="sync-err-msg">Connection issue — retrying…</div>}
               </div>
-              <div className="wait-dots"><span /><span /><span /></div>
-              {syncError && <div className="sync-err-msg">Connection issue — retrying…</div>}
+              <div className="rack-label">Your Rack</div>
+              <div className="rack">
+                {myRack.map((tile) => (
+                  <Tile key={tile.id} tile={tile} size="rack" />
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -951,7 +1054,7 @@ export default function App() {
                   onDrop={(e) => handleDrop(e, r, c)}
                 >
                   {cell ? (
-                    <div className={`tile tile--board${isPending ? ' tile--pending' : ' tile--placed'}${cell.isWild ? ' tile--wild' : ''}`}>
+                    <div className={`tile tile--board${isPending ? ' tile--pending' : ' tile--placed'}${cell.isWild ? ' tile--wild' : ''}${!isPending && lastMoveSet.has(key) ? ' tile--last-move' : ''}`}>
                       <span className={`tile-num c-${cell.isWild ? (cell.chosenColor ?? 'wild') : cell.color}`}>
                         {cell.isWild ? (cell.chosen ?? '★') : cell.value}
                       </span>
@@ -970,5 +1073,7 @@ export default function App() {
       </div>
 
     </div>
+    {showInstallBanner && <InstallBanner isIOS={isIOS} onInstall={triggerInstall} onDismiss={dismissInstall} />}
+    </>
   );
 }

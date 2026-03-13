@@ -1,0 +1,25 @@
+{
+  "name": "Rumble",
+  "short_name": "Rumble",
+  "description": "A two-player number tile game",
+  "start_url": "/rumble/",
+  "scope": "/rumble/",
+  "display": "standalone",
+  "background_color": "#0a1628",
+  "theme_color": "#0a1628",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/rumble/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/rumble/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
