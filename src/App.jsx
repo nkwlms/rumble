@@ -290,6 +290,7 @@ function Lobby({ onNew, onJoin, onLocal, syncing, name, onNameChange, activeGame
 export default function App() {
   const urlGameId = new URLSearchParams(window.location.search).get('game');
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  const isMobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
 
   const [mode, setMode] = useState(() => {
     if (urlGameId) return 'join-prompt';
@@ -818,7 +819,7 @@ export default function App() {
 
   // ── Render: Web gate (not running as installed PWA) ─────────────────────────
 
-  if (!isStandalone) {
+  if (isMobile && !isStandalone) {
     return <WebGate gameId={urlGameId} isIOS={isIOS} installPrompt={installPrompt} onInstall={triggerInstall} />;
   }
 
