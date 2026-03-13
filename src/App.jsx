@@ -400,7 +400,13 @@ export default function App() {
     else navigator.clearAppBadge().catch(() => {});
   }, [mode, game?.currentPlayer, game?.gameOver, myPlayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // (join-prompt handles the URL game load after name entry)
+  // Auto-join when arriving via share link and name is already set
+  useEffect(() => {
+    if (mode === 'join-prompt' && !showNameGate && gameId) {
+      setMode('loading');
+      loadOnlineGame(gameId);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch active games when returning to lobby
   useEffect(() => {
@@ -858,26 +864,14 @@ export default function App() {
 
   if (mode === 'join-prompt') {
     if (showNameGate) {
-      return <NameGate onDone={n => { saveName(n); setShowNameGate(false); }} />;
+      return <NameGate onDone={n => { saveName(n); setShowNameGate(false); setMode('loading'); loadOnlineGame(gameId); }} />;
     }
+    // Name already set — show loading while we auto-join
     return (
       <div className="app lobby">
         <h1 className="title">RUMBLE</h1>
         <div className="lobby-card">
-          <div className="lobby-divider" style={{ fontSize: '0.9rem', color: '#8fa0b4' }}>
-            You've been invited to a game
-          </div>
-          <button
-            className="btn btn--play lobby-btn"
-            onClick={() => { setMode('loading'); loadOnlineGame(gameId); }}
-          >
-            Join Game as {myName}
-          </button>
-          <button className="wild-picker__cancel" style={{ alignSelf: 'center' }}
-            onClick={() => { window.history.pushState(null, '', window.location.pathname); setMode('lobby'); }}
-          >
-            Cancel
-          </button>
+          <div className="loading-msg">Joining game…</div>
         </div>
       </div>
     );
