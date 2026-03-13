@@ -152,6 +152,43 @@ function Tile({ tile, size = 'board', selected = false, onClick, onDragStart }) 
   );
 }
 
+// ── Name gate (shown on first launch if no name is stored) ───────────────────
+
+function NameGate({ onDone }) {
+  const [value, setValue] = useState('');
+  function submit() {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    localStorage.setItem('rumble_name', trimmed);
+    onDone(trimmed);
+  }
+  return (
+    <div className="wild-overlay">
+      <div className="wild-picker">
+        <div className="wild-picker__title">What's your name?</div>
+        <input
+          className="lobby-input lobby-name-input"
+          placeholder="Enter your name"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          maxLength={20}
+          autoFocus
+          onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+          style={{ margin: '8px 0' }}
+        />
+        <button
+          className="btn btn--play"
+          onClick={submit}
+          disabled={!value.trim()}
+          style={{ width: '100%' }}
+        >
+          Start Playing
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Web gate (shown in Safari / browser — not the installed PWA) ──────────────
 
 function WebGate({ gameId, isIOS, installPrompt, onInstall }) {
@@ -209,30 +246,16 @@ function WebGate({ gameId, isIOS, installPrompt, onInstall }) {
 
 // ── Lobby screen ──────────────────────────────────────────────────────────────
 
-function Lobby({ onNew, onJoin, onLocal, syncing, name, onNameChange, activeGames, onResume }) {
+function Lobby({ onNew, onJoin, onLocal, syncing, name, onEditName, activeGames, onResume }) {
   const [joinInput, setJoinInput] = useState('');
-  const [editingName, setEditingName] = useState(!name);
   return (
     <div className="app lobby">
       <h1 className="title">RUMBLE</h1>
       <div className="lobby-card">
-        {editingName ? (
-          <input
-            className="lobby-input lobby-name-input"
-            placeholder="Your name"
-            value={name}
-            onChange={e => onNameChange(e.target.value)}
-            maxLength={20}
-            autoFocus
-            onBlur={() => { if (name) setEditingName(false); }}
-            onKeyDown={e => { if (e.key === 'Enter' && name) setEditingName(false); }}
-          />
-        ) : (
-          <div className="lobby-playing-as">
-            Playing as <strong>{name}</strong>
-            <button className="lobby-edit-name" onClick={() => setEditingName(true)}>Edit</button>
-          </div>
-        )}
+        <div className="lobby-playing-as">
+          Playing as <strong>{name}</strong>
+          <button className="lobby-edit-name" onClick={onEditName}>Edit</button>
+        </div>
         {SCRIPT_URL ? (
           <>
             <button className="btn btn--play lobby-btn" onClick={onNew} disabled={syncing}>
@@ -316,10 +339,17 @@ export default function App() {
   const [gameId, setGameId]     = useState(urlGameId);
   const [myPlayer, setMyPlayer] = useState(null);
   const [myName, setMyName]     = useState(() => localStorage.getItem('rumble_name') || '');
+  const [showNameGate, setShowNameGate] = useState(() => !localStorage.getItem('rumble_name'));
 
   function saveName(n) {
     setMyName(n);
     localStorage.setItem('rumble_name', n);
+  }
+
+  function clearNameForEdit() {
+    localStorage.removeItem('rumble_name');
+    setMyName('');
+    setShowNameGate(true);
   }
 
   function addGameToHistory(id) {
@@ -827,6 +857,9 @@ export default function App() {
   // ── Render: Join prompt (arrived via share link) ────────────────────────────
 
   if (mode === 'join-prompt') {
+    if (showNameGate) {
+      return <NameGate onDone={n => { saveName(n); setShowNameGate(false); }} />;
+    }
     return (
       <div className="app lobby">
         <h1 className="title">RUMBLE</h1>
@@ -834,22 +867,11 @@ export default function App() {
           <div className="lobby-divider" style={{ fontSize: '0.9rem', color: '#8fa0b4' }}>
             You've been invited to a game
           </div>
-          <input
-            className="lobby-input lobby-name-input"
-            placeholder="Your name"
-            value={myName}
-            onChange={e => saveName(e.target.value)}
-            maxLength={20}
-            autoFocus
-            onKeyDown={e => {
-              if (e.key === 'Enter') { setMode('loading'); loadOnlineGame(gameId); }
-            }}
-          />
           <button
             className="btn btn--play lobby-btn"
             onClick={() => { setMode('loading'); loadOnlineGame(gameId); }}
           >
-            Join Game
+            Join Game as {myName}
           </button>
           <button className="wild-picker__cancel" style={{ alignSelf: 'center' }}
             onClick={() => { window.history.pushState(null, '', window.location.pathname); setMode('lobby'); }}
@@ -864,19 +886,20 @@ export default function App() {
   // ── Render: Lobby ───────────────────────────────────────────────────────────
 
   if (mode === 'lobby') {
+    if (showNameGate) {
+      return <NameGate onDone={n => { saveName(n); setShowNameGate(false); }} />;
+    }
     return (
-      <>
-        <Lobby
-          onNew={createNewGame}
-          onJoin={joinOnlineGame}
-          onLocal={startLocal}
-          syncing={syncing}
-          name={myName}
-          onNameChange={saveName}
-          activeGames={activeGames}
-          onResume={id => { window.location.assign(`${window.location.pathname}?game=${id}`); }}
-        />
-      </>
+      <Lobby
+        onNew={createNewGame}
+        onJoin={joinOnlineGame}
+        onLocal={startLocal}
+        syncing={syncing}
+        name={myName}
+        onEditName={clearNameForEdit}
+        activeGames={activeGames}
+        onResume={id => { window.location.assign(`${window.location.pathname}?game=${id}`); }}
+      />
     );
   }
 
