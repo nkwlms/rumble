@@ -221,18 +221,25 @@ function Lobby({ onNew, onJoin, onLocal, syncing, name, onNameChange, activeGame
 export default function App() {
   const urlGameId = new URLSearchParams(window.location.search).get('game');
 
+  // Save invite to localStorage so it survives "Add to Home Screen" on iOS.
+  // When the PWA launches at start_url (/rumble/) with no query param,
+  // we pick up the pending invite from localStorage instead.
+  if (urlGameId) localStorage.setItem('rumble_pending_invite', urlGameId);
+  const pendingInvite = !urlGameId ? localStorage.getItem('rumble_pending_invite') : null;
+  const effectiveGameId = urlGameId || pendingInvite;
+
   const [mode, setMode] = useState(() => {
-    if (urlGameId) return 'join-prompt';
+    if (effectiveGameId) return 'join-prompt';
     if (!SCRIPT_URL) return 'local';
     return 'lobby';
   });
 
   const [game, setGame] = useState(() => {
-    if (urlGameId || SCRIPT_URL) return null;
+    if (effectiveGameId || SCRIPT_URL) return null;
     return initGame();
   });
 
-  const [gameId, setGameId]     = useState(urlGameId);
+  const [gameId, setGameId]     = useState(effectiveGameId);
   const [myPlayer, setMyPlayer] = useState(null);
   const [myName, setMyName]     = useState(() => localStorage.getItem('rumble_name') || '');
 
@@ -359,6 +366,7 @@ export default function App() {
       if (stored) {
         const { player: p, secret } = JSON.parse(stored);
         if (state.secrets?.[p] === secret) {
+          localStorage.removeItem('rumble_pending_invite');
           setMyPlayer(p);
           setGame(fromSyncState(state));
           setGameId(id);
@@ -375,6 +383,7 @@ export default function App() {
         await saveGame(id, newState);
         localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 1, secret }));
         addGameToHistory(id);
+        localStorage.removeItem('rumble_pending_invite');
         setMyPlayer(1);
         setGame(fromSyncState(newState));
         setGameId(id);
@@ -383,6 +392,7 @@ export default function App() {
       }
 
       // Spectator / game already full
+      localStorage.removeItem('rumble_pending_invite');
       setMyPlayer(null);
       setGame(fromSyncState(state));
       setGameId(id);
@@ -743,17 +753,17 @@ export default function App() {
             maxLength={20}
             autoFocus
             onKeyDown={e => {
-              if (e.key === 'Enter') { setMode('loading'); loadOnlineGame(urlGameId); }
+              if (e.key === 'Enter') { setMode('loading'); loadOnlineGame(gameId); }
             }}
           />
           <button
             className="btn btn--play lobby-btn"
-            onClick={() => { setMode('loading'); loadOnlineGame(urlGameId); }}
+            onClick={() => { setMode('loading'); loadOnlineGame(gameId); }}
           >
             Join Game
           </button>
           <button className="wild-picker__cancel" style={{ alignSelf: 'center' }}
-            onClick={() => { window.history.pushState(null, '', window.location.pathname); setMode('lobby'); }}
+            onClick={() => { localStorage.removeItem('rumble_pending_invite'); window.history.pushState(null, '', window.location.pathname); setMode('lobby'); }}
           >
             Cancel
           </button>
