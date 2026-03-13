@@ -731,21 +731,23 @@ export default function App() {
     };
 
     setGame(newGame);
-    syncGame(newGame);
     if (mode === 'online' && !newGame.gameOver) {
       const oppIdx = (myPlayer + 1) % NUM_PLAYERS;
       const myName = newGame.names?.[myPlayer] || 'Opponent';
-      // Fetch latest to get opponent's subscription in case it was registered after we loaded
+      // Fetch latest to get opponent's subscription, then save with merged pushSubs
       fetchGame(gameId).then(latest => {
-        sendPushNotification(
-          latest.pushSubs?.[oppIdx] ?? newGame.pushSubs?.[oppIdx],
-          "It's your turn!",
-          `${myName} just played`,
-          gameId,
-        );
+        const mergedSubs = [
+          latest.pushSubs?.[0] ?? newGame.pushSubs?.[0],
+          latest.pushSubs?.[1] ?? newGame.pushSubs?.[1],
+        ];
+        syncGame({ ...newGame, pushSubs: mergedSubs });
+        sendPushNotification(mergedSubs[oppIdx], "It's your turn!", `${myName} just played`, gameId);
       }).catch(() => {
+        syncGame(newGame);
         sendPushNotification(newGame.pushSubs?.[oppIdx], "It's your turn!", `${myName} just played`, gameId);
       });
+    } else {
+      syncGame(newGame);
     }
   }
 
@@ -798,20 +800,22 @@ export default function App() {
     };
 
     setGame(newGame);
-    syncGame(newGame);
     if (mode === 'online' && !newGame.gameOver) {
       const oppIdx = (myPlayer + 1) % NUM_PLAYERS;
       const myName = newGame.names?.[myPlayer] || 'Opponent';
       fetchGame(gameId).then(latest => {
-        sendPushNotification(
-          latest.pushSubs?.[oppIdx] ?? newGame.pushSubs?.[oppIdx],
-          "It's your turn!",
-          `${myName} passed`,
-          gameId,
-        );
+        const mergedSubs = [
+          latest.pushSubs?.[0] ?? newGame.pushSubs?.[0],
+          latest.pushSubs?.[1] ?? newGame.pushSubs?.[1],
+        ];
+        syncGame({ ...newGame, pushSubs: mergedSubs });
+        sendPushNotification(mergedSubs[oppIdx], "It's your turn!", `${myName} passed`, gameId);
       }).catch(() => {
+        syncGame(newGame);
         sendPushNotification(newGame.pushSubs?.[oppIdx], "It's your turn!", `${myName} passed`, gameId);
       });
+    } else {
+      syncGame(newGame);
     }
   }
 
