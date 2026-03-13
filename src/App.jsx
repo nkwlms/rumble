@@ -384,7 +384,7 @@ export default function App() {
   useEffect(() => {
     if (mode !== 'online' || !gameId || !game) return;
     if (game.gameOver) return;
-    const needsPoll = game.status === 'waiting' || game.currentPlayer !== myPlayer;
+    const needsPoll = game.status === 'waiting' || game.currentPlayer !== myPlayer || !game.pushSubs?.[1 - myPlayer];
     if (!needsPoll) return;
 
     const id = setInterval(async () => {
@@ -395,7 +395,11 @@ export default function App() {
           state.currentPlayer !== game.currentPlayer ||
           state.status !== game.status ||
           state.gameOver !== game.gameOver;
-        if (changed) setGame(fromSyncState(state));
+        if (changed) {
+          setGame(fromSyncState(state));
+        } else if (state.pushSubs) {
+          setGame(g => g ? { ...g, pushSubs: state.pushSubs } : g);
+        }
       } catch {
         setSyncError(true);
       }
@@ -730,12 +734,18 @@ export default function App() {
     syncGame(newGame);
     if (mode === 'online' && !newGame.gameOver) {
       const oppIdx = (myPlayer + 1) % NUM_PLAYERS;
-      sendPushNotification(
-        newGame.pushSubs?.[oppIdx],
-        "It's your turn!",
-        `${newGame.names?.[myPlayer] || 'Opponent'} just played`,
-        gameId,
-      );
+      const myName = newGame.names?.[myPlayer] || 'Opponent';
+      // Fetch latest to get opponent's subscription in case it was registered after we loaded
+      fetchGame(gameId).then(latest => {
+        sendPushNotification(
+          latest.pushSubs?.[oppIdx] ?? newGame.pushSubs?.[oppIdx],
+          "It's your turn!",
+          `${myName} just played`,
+          gameId,
+        );
+      }).catch(() => {
+        sendPushNotification(newGame.pushSubs?.[oppIdx], "It's your turn!", `${myName} just played`, gameId);
+      });
     }
   }
 
@@ -791,12 +801,17 @@ export default function App() {
     syncGame(newGame);
     if (mode === 'online' && !newGame.gameOver) {
       const oppIdx = (myPlayer + 1) % NUM_PLAYERS;
-      sendPushNotification(
-        newGame.pushSubs?.[oppIdx],
-        "It's your turn!",
-        `${newGame.names?.[myPlayer] || 'Opponent'} passed`,
-        gameId,
-      );
+      const myName = newGame.names?.[myPlayer] || 'Opponent';
+      fetchGame(gameId).then(latest => {
+        sendPushNotification(
+          latest.pushSubs?.[oppIdx] ?? newGame.pushSubs?.[oppIdx],
+          "It's your turn!",
+          `${myName} passed`,
+          gameId,
+        );
+      }).catch(() => {
+        sendPushNotification(newGame.pushSubs?.[oppIdx], "It's your turn!", `${myName} passed`, gameId);
+      });
     }
   }
 
