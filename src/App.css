@@ -251,7 +251,7 @@
 .tile--board {
   width: calc(var(--cell) - 5px);
   height: calc(var(--cell) - 5px);
-  font-size: calc(var(--cell) * 0.3);
+  font-size: calc(var(--cell) * 0.42);
   pointer-events: none;
 }
 
@@ -300,7 +300,7 @@
   position: relative;
   z-index: 1;
 }
-.tile--rack .tile-num { font-size: calc(var(--rack-tile) * 0.4); }
+.tile--rack .tile-num { font-size: calc(var(--rack-tile) * 0.52); }
 
 .tile--rack:hover {
   transform: translateY(-4px);
@@ -316,7 +316,7 @@
 }
 
 .tile--rack.tile--wild { background: #ede3c5; }
-.tile--rack.tile--wild .tile-num { font-size: calc(var(--rack-tile) * 0.32); }
+.tile--rack.tile--wild .tile-num { font-size: calc(var(--rack-tile) * 0.42); }
 .tile--rack.tile--wild.tile--selected { background: #ffd54f !important; }
 
 /* ── Controls ───────────────────────────────────────────────────────────── */
@@ -499,6 +499,16 @@
 }
 
 .lobby-btn { width: 100%; padding: 12px; font-size: 0.95rem; }
+
+.lobby-name-input {
+  font-family: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  font-size: 1rem;
+  border-color: #4a8ac8;
+  width: 100%;
+  box-sizing: border-box;
+}
 
 .lobby-divider {
   text-align: center;

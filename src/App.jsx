@@ -59,14 +59,20 @@ function fromSyncState(state) {
   return { ...state, pending: {}, selectedIdx: null };
 }
 
-function playerLabel(idx, myPlayer) {
-  if (myPlayer === null) return `Player ${idx + 1}`;
-  return idx === myPlayer ? 'You' : 'Opponent';
+function playerLabel(idx, myPlayer, names) {
+  const name = names?.[idx];
+  if (myPlayer === null) return name || `Player ${idx + 1}`;
+  return name || (idx === myPlayer ? 'You' : 'Opponent');
 }
 
-function turnMsg(nextPlayer, myPlayer) {
-  if (myPlayer === null) return `Player ${nextPlayer + 1}'s turn.`;
-  return nextPlayer === myPlayer ? 'Your turn!' : "Opponent's turn — waiting…";
+function turnMsg(nextPlayer, myPlayer, names) {
+  if (myPlayer === null) {
+    const name = names?.[nextPlayer] || `Player ${nextPlayer + 1}`;
+    return `${name}'s turn.`;
+  }
+  if (nextPlayer === myPlayer) return 'Your turn!';
+  const opName = names?.[nextPlayer] || 'Opponent';
+  return `${opName}'s turn — waiting…`;
 }
 
 // ── Tile component ────────────────────────────────────────────────────────────
@@ -99,12 +105,19 @@ function Tile({ tile, size = 'board', selected = false, onClick, onDragStart }) 
 
 // ── Lobby screen ──────────────────────────────────────────────────────────────
 
-function Lobby({ onNew, onJoin, onLocal, syncing }) {
+function Lobby({ onNew, onJoin, onLocal, syncing, name, onNameChange }) {
   const [joinInput, setJoinInput] = useState('');
   return (
     <div className="app lobby">
       <h1 className="title">RUMBLE</h1>
       <div className="lobby-card">
+        <input
+          className="lobby-input lobby-name-input"
+          placeholder="Your name"
+          value={name}
+          onChange={e => onNameChange(e.target.value)}
+          maxLength={20}
+        />
         {SCRIPT_URL ? (
           <>
             <button className="btn btn--play lobby-btn" onClick={onNew} disabled={syncing}>
@@ -161,6 +174,12 @@ export default function App() {
 
   const [gameId, setGameId]     = useState(urlGameId);
   const [myPlayer, setMyPlayer] = useState(null);
+  const [myName, setMyName]     = useState(() => localStorage.getItem('rumble_name') || '');
+
+  function saveName(n) {
+    setMyName(n);
+    localStorage.setItem('rumble_name', n);
+  }
   const [syncing, setSyncing]   = useState(false);
   const [syncError, setSyncError] = useState(false);
   const [copyDone, setCopyDone] = useState(false);
@@ -223,7 +242,8 @@ export default function App() {
       // Auto-join as player 2 if the slot is still open
       if (state.status === 'waiting' && state.secrets?.[1] === null) {
         const secret = randId(16);
-        const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active' };
+        const joinerName = localStorage.getItem('rumble_name') || '';
+        const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active', names: [state.names?.[0] ?? null, joinerName || null] };
         await saveGame(id, newState);
         localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 1, secret }));
         setMyPlayer(1);
@@ -249,7 +269,7 @@ export default function App() {
       const id = randId(6);
       const secret = randId(16);
       const base = initGame();
-      const state = { ...toSyncState(base), secrets: [secret, null], status: 'waiting' };
+      const state = { ...toSyncState(base), secrets: [secret, null], status: 'waiting', names: [myName || null, null] };
       await saveGame(id, state);
       localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 0, secret }));
       window.history.pushState(null, '', `?game=${id}`);
@@ -271,7 +291,7 @@ export default function App() {
       if (state.error === 'not_found') { alert(`Game "${id}" not found.`); return; }
       if (state.secrets?.[1] !== null) { alert('This game already has two players.'); return; }
       const secret = randId(16);
-      const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active' };
+      const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active', names: [state.names?.[0] ?? null, myName || null] };
       await saveGame(id, newState);
       localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 1, secret }));
       window.history.pushState(null, '', `?game=${id}`);
@@ -482,7 +502,7 @@ export default function App() {
       gameOver,
       message: gameOver
         ? `🏆 Game over! ${getWinnerText(newPlayers)}`
-        : `✅ +${points} pts! ${turnMsg(nextPlayer, myPlayer)}`,
+        : `✅ +${points} pts! ${turnMsg(nextPlayer, myPlayer, game.names)}`,
     };
 
     setGame(newGame);
@@ -525,7 +545,7 @@ export default function App() {
       currentPlayer: nextPlayer,
       pending: {},
       selectedIdx: null,
-      message: `${playerLabel(game.currentPlayer, myPlayer)} passed. ${turnMsg(nextPlayer, myPlayer)}`,
+      message: `${playerLabel(game.currentPlayer, myPlayer, game.names)} passed. ${turnMsg(nextPlayer, myPlayer, game.names)}`,
     };
 
     setGame(newGame);
@@ -572,6 +592,8 @@ export default function App() {
         onJoin={joinOnlineGame}
         onLocal={startLocal}
         syncing={syncing}
+        name={myName}
+        onNameChange={saveName}
       />
     );
   }
@@ -742,7 +764,7 @@ export default function App() {
               key={i}
               className={`score-card${i === game.currentPlayer && !game.gameOver ? ' score-card--active' : ''}`}
             >
-              <div className="score-card__label">{playerLabel(i, myPlayer)}</div>
+              <div className="score-card__label">{playerLabel(i, myPlayer, game.names)}</div>
               <div className="score-card__value">{p.score}</div>
             </div>
           ))}
@@ -790,7 +812,7 @@ export default function App() {
           ) : (
             <div className="rack-area opponent-wait">
               <div className="rack-label">
-                {myPlayer !== null ? "Opponent's turn" : `Player ${game.currentPlayer + 1}'s turn`}
+                {playerLabel(game.currentPlayer, myPlayer, game.names)}'s turn
               </div>
               <div className="wait-dots"><span /><span /><span /></div>
               {syncError && <div className="sync-err-msg">Connection issue — retrying…</div>}
