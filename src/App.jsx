@@ -5,6 +5,7 @@ import {
   COLORS,
   STAR_SET,
   PREMIUM,
+  HOLES,
   createBag,
   drawTiles,
   shuffle,
@@ -602,6 +603,7 @@ export default function App() {
     if (!game || game.gameOver) return;
     if (mode === 'online' && game.currentPlayer !== myPlayer) return;
     const key = `${r},${c}`;
+    if (HOLES.has(key)) return;
     if (game.board[r][c]) return;
     const tile = game.players[game.currentPlayer].rack[rackIdx];
     if (!tile) return;
@@ -634,6 +636,7 @@ export default function App() {
     if (!game || game.gameOver) return;
     if (mode === 'online' && game.currentPlayer !== myPlayer) return;
     const key = `${r},${c}`;
+    if (HOLES.has(key)) return;
 
     if (game.pending[key]) {
       setGame(g => {
@@ -685,7 +688,7 @@ export default function App() {
     dragIdx.current = null;
     if (src === null) return;
     const key = `${r},${c}`;
-    if (game.pending[key] || game.board[r][c]) return;
+    if (HOLES.has(key) || game.pending[key] || game.board[r][c]) return;
     placeTile(r, c, src);
   }
 
@@ -1159,12 +1162,14 @@ export default function App() {
               const isPending = !!game.pending[key];
               const prem = PREMIUM[key];
               const isStar = STAR_SET.has(key) && !cell;
+              const isHole = HOLES.has(key);
 
               return (
                 <div
                   key={key}
                   className={[
                     'cell',
+                    isHole                ? 'cell--hole' : '',
                     isStar                ? 'cell--star' : '',
                     !cell && prem === 'dn' ? 'cell--dn'   : '',
                     !cell && prem === 'dw' ? 'cell--dw'   : '',

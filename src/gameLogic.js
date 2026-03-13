@@ -1,22 +1,31 @@
-export const BOARD_SIZE = 12;
+export const BOARD_SIZE = 9;
 export const HAND_SIZE = 7;
 export const COLORS = ['red', 'blue'];
 
-// ── Starting stars — one per quadrant ────────────────────────────────────────
-// (3,3), (3,11), (11,3), (11,11) — symmetric around centre (7,7)
-export const STARS = [[3, 3], [3, 8], [8, 3], [8, 8]];
+// ── Starting stars ────────────────────────────────────────────────────────────
+export const STARS = [[2, 2], [2, 6], [6, 2], [6, 6]];
 export const STAR_SET = new Set(STARS.map(([r, c]) => `${r},${c}`));
+
+// ── Holes — impassable cells ──────────────────────────────────────────────────
+export const HOLES = new Set([
+  '0,3', '0,5',
+  '3,0', '5,0',
+  '3,8', '5,8',
+  '8,3', '8,5',
+]);
 
 // ── Premium squares ───────────────────────────────────────────────────────────
 export const PREMIUM = {};
 [
-  [1, 1], [1, 10], [10, 1], [10, 10],  // 2× Word — inner corners
+  [0, 0], [0, 8], [8, 0], [8, 8],  // 2× Word — corners
+  [4, 4],                           // 2× Word — centre
 ].forEach(([r, c]) => { PREMIUM[`${r},${c}`] = 'dw'; });
 [
-  [0, 4], [0, 7],  [11, 4], [11, 7],   // 2× Number — top/bottom edges
-  [4, 0], [7, 0],  [4, 11], [7, 11],   // 2× Number — left/right edges
-  [2, 3], [2, 8],  [9, 3],  [9, 8],    // 2× Number — inner ring
-  [3, 2], [8, 2],  [3, 9],  [8, 9],    // 2× Number — inner ring (transposed)
+  [1, 1], [1, 7],                   // 2× Number — inner corners
+  [2, 4],                           // 2× Number — top inner mid
+  [4, 2], [4, 6],                   // 2× Number — mid row
+  [6, 4],                           // 2× Number — bottom inner mid
+  [7, 1], [7, 7],                   // 2× Number — inner corners
 ].forEach(([r, c]) => { PREMIUM[`${r},${c}`] = 'dn'; });
 
 // ── Tile bag ──────────────────────────────────────────────────────────────────
