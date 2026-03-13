@@ -21,11 +21,48 @@ const COLOR_LABELS = { red: 'Red', blue: 'Blue', green: 'Green', orange: 'Orange
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxK_C0u3wfpHawR_HeCcYME3sT0OWL95DTy0ZbFOoxzvsH-4LdUKFlHlLGQF92SBorxbw/exec';
 const POLL_MS = 4000;
 
+// Push notifications — set PUSH_WORKER_URL after deploying push-worker/
+const VAPID_PUBLIC_KEY = 'BFxtxIfXazlhzvlTwpaVEFuugHS1iOIyCJGWjoP8nLG_YoN0Lc7oX2iYRbYc8J0a0p3rFdC1a5L-7Fuzd6oU7i4';
+const PUSH_WORKER_URL  = 'https://rumble-push.frosty-butterfly-fcba.workers.dev';
+
 function randId(len) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let s = '';
   while (s.length < len) s += chars[Math.floor(Math.random() * chars.length)];
   return s;
+}
+
+// ── Push notification helpers ─────────────────────────────────────────────────
+
+function urlBase64ToUint8Array(b64) {
+  const padding = '='.repeat((4 - b64.length % 4) % 4);
+  const base64 = (b64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  return new Uint8Array([...atob(base64)].map(c => c.charCodeAt(0)));
+}
+
+async function subscribePush() {
+  if (!PUSH_WORKER_URL) return null;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') return null;
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+    });
+  }
+  return sub.toJSON();
+}
+
+function sendPushNotification(subscription, title, body, gameId) {
+  if (!subscription || !PUSH_WORKER_URL) return;
+  fetch(PUSH_WORKER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subscription, title, message: body, gameId }),
+  }).catch(() => {});
 }
 
 function initGame() {
@@ -363,6 +400,23 @@ export default function App() {
     return () => clearInterval(id);
   }, [mode, gameId, game?.currentPlayer, game?.status, game?.gameOver, myPlayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Subscribe to push when entering an online game (once per game session)
+  useEffect(() => {
+    if (mode !== 'online' || myPlayer === null || !gameId || !PUSH_WORKER_URL) return;
+    subscribePush().then(async sub => {
+      if (!sub) return;
+      // Skip if our subscription is already current
+      if (game?.pushSubs?.[myPlayer]?.endpoint === sub.endpoint) return;
+      // Fetch latest state to avoid overwriting opponent's sub
+      const latest = await fetchGame(gameId);
+      if (latest.error) return;
+      const pushSubs = [...(latest.pushSubs || [null, null])];
+      pushSubs[myPlayer] = sub;
+      saveGame(gameId, { ...latest, pushSubs }).catch(() => {});
+      setGame(g => g ? { ...g, pushSubs } : g);
+    }).catch(() => {});
+  }, [mode, myPlayer, gameId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Online helpers ──────────────────────────────────────────────────────────
 
   async function loadOnlineGame(id) {
@@ -417,7 +471,7 @@ export default function App() {
       const id = randId(6);
       const secret = randId(16);
       const base = initGame();
-      const state = { ...toSyncState(base), secrets: [secret, null], status: 'waiting', names: [myName || null, null] };
+      const state = { ...toSyncState(base), secrets: [secret, null], status: 'waiting', names: [myName || null, null], pushSubs: [null, null] };
       await saveGame(id, state);
       localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 0, secret }));
       addGameToHistory(id);
@@ -659,6 +713,15 @@ export default function App() {
 
     setGame(newGame);
     syncGame(newGame);
+    if (mode === 'online' && !newGame.gameOver) {
+      const oppIdx = (myPlayer + 1) % NUM_PLAYERS;
+      sendPushNotification(
+        newGame.pushSubs?.[oppIdx],
+        "It's your turn!",
+        `${newGame.names?.[myPlayer] || 'Opponent'} just played`,
+        gameId,
+      );
+    }
   }
 
   function recallAll() {
@@ -711,6 +774,15 @@ export default function App() {
 
     setGame(newGame);
     syncGame(newGame);
+    if (mode === 'online' && !newGame.gameOver) {
+      const oppIdx = (myPlayer + 1) % NUM_PLAYERS;
+      sendPushNotification(
+        newGame.pushSubs?.[oppIdx],
+        "It's your turn!",
+        `${newGame.names?.[myPlayer] || 'Opponent'} passed`,
+        gameId,
+      );
+    }
   }
 
   function newGame() {

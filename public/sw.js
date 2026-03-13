@@ -15,6 +15,49 @@ self.addEventListener('activate', e => {
   );
 });
 
+// ── Push notifications ────────────────────────────────────────────────────────
+
+self.addEventListener('push', e => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch {}
+
+  const title = data.title || "It's your turn!";
+  const body  = data.body  || 'A move is waiting in Rumble';
+  const gameId = data.gameId;
+
+  e.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon:      '/rumble/icon-192.png',
+      badge:     '/rumble/icon-192.png',
+      tag:       gameId ? `rumble-${gameId}` : 'rumble',
+      renotify:  true,
+      data:      { gameId },
+    })
+  );
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const gameId = e.notification.data?.gameId;
+  const url = gameId
+    ? `${self.location.origin}/rumble/?game=${gameId}`
+    : `${self.location.origin}/rumble/`;
+
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const c of list) {
+        if (c.url.includes('/rumble/') && 'focus' in c) {
+          return c.focus().then(w => w.navigate(url));
+        }
+      }
+      return clients.openWindow(url);
+    })
+  );
+});
+
+// ── Fetch (cache-first for same-origin) ───────────────────────────────────────
+
 self.addEventListener('fetch', e => {
   // Only handle GET requests; skip cross-origin (Google Apps Script, etc.)
   if (e.request.method !== 'GET') return;

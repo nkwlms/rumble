@@ -1,0 +1,6 @@
+name = "rumble-push"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+
+[vars]
+VAPID_PUBLIC_KEY = "BFxtxIfXazlhzvlTwpaVEFuugHS1iOIyCJGWjoP8nLG_YoN0Lc7oX2iYRbYc8J0a0p3rFdC1a5L-7Fuzd6oU7i4"
