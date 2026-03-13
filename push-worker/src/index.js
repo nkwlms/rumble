@@ -1,7 +1,8 @@
 // Rumble push notification worker
 // Handles VAPID JWT signing and RFC 8291 (aes128gcm) Web Push encryption.
 // Deploy with: cd push-worker && wrangler deploy
-// Set secret: wrangler secret put VAPID_PRIVATE_KEY_JWK
+// Set secret:  wrangler secret put VAPID_PRIVATE_KEY_JWK
+// Create KV:   wrangler kv namespace create SUBS  (then add the ID to wrangler.toml)
 
 const VAPID_SUBJECT = 'mailto:rumble-push@example.com';
 
@@ -66,7 +67,6 @@ async function encryptPayload(payloadStr, subscription) {
   const p256dh = base64urlToBytes(subscription.keys.p256dh);
   const auth   = base64urlToBytes(subscription.keys.auth);
 
-  // Server ephemeral ECDH key pair
   const serverPair = await crypto.subtle.generateKey(
     { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'],
   );
@@ -74,7 +74,6 @@ async function encryptPayload(payloadStr, subscription) {
     await crypto.subtle.exportKey('raw', serverPair.publicKey),
   );
 
-  // ECDH shared secret
   const receiverKey = await crypto.subtle.importKey(
     'raw', p256dh, { name: 'ECDH', namedCurve: 'P-256' }, false, [],
   );
@@ -84,7 +83,6 @@ async function encryptPayload(payloadStr, subscription) {
 
   const salt = crypto.getRandomValues(new Uint8Array(16));
 
-  // Phase 1: extract IKM (HKDF with auth as salt)
   const sharedKey = await crypto.subtle.importKey(
     'raw', sharedSecret, 'HKDF', false, ['deriveBits'],
   );
@@ -93,7 +91,6 @@ async function encryptPayload(payloadStr, subscription) {
     { name: 'HKDF', hash: 'SHA-256', salt: auth, info: info1 }, sharedKey, 256,
   ));
 
-  // Phase 2: derive CEK and nonce (HKDF with random salt)
   const ikmKey = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
   const cek = new Uint8Array(await crypto.subtle.deriveBits(
     { name: 'HKDF', hash: 'SHA-256', salt, info: enc.encode('Content-Encoding: aes128gcm\0') },
@@ -104,14 +101,12 @@ async function encryptPayload(payloadStr, subscription) {
     ikmKey, 96,
   ));
 
-  // Encrypt (payload + 0x02 padding delimiter)
   const plaintext = concat(enc.encode(payloadStr), new Uint8Array([0x02]));
   const aesKey = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
   const ciphertext = new Uint8Array(
     await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aesKey, plaintext),
   );
 
-  // aes128gcm header: salt (16) | rs (4) | idlen (1) | server public key (65)
   const hdr = new Uint8Array(86);
   hdr.set(salt, 0);
   new DataView(hdr.buffer).setUint32(16, 4096, false);
@@ -119,6 +114,31 @@ async function encryptPayload(payloadStr, subscription) {
   hdr.set(serverPubRaw, 21);
 
   return concat(hdr, ciphertext);
+}
+
+// ── Send a push to a subscription object ─────────────────────────────────────
+
+async function deliverPush(subscription, title, message, gameId, env) {
+  const payload = JSON.stringify({ title, body: message, gameId });
+  const encrypted = await encryptPayload(payload, subscription);
+  const audience = new URL(subscription.endpoint).origin;
+  const jwt = await buildVapidJwt(audience, env.VAPID_PRIVATE_KEY_JWK);
+
+  const pushRes = await fetch(subscription.endpoint, {
+    method: 'POST',
+    headers: {
+      'Authorization': `vapid t=${jwt},k=${env.VAPID_PUBLIC_KEY}`,
+      'Content-Type': 'application/octet-stream',
+      'Content-Encoding': 'aes128gcm',
+      'TTL': '86400',
+    },
+    body: encrypted,
+  });
+
+  return new Response(
+    JSON.stringify({ ok: pushRes.ok, status: pushRes.status }),
+    { headers: { 'Content-Type': 'application/json', ...CORS } },
+  );
 }
 
 // ── Request handler ───────────────────────────────────────────────────────────
@@ -145,33 +165,44 @@ export default {
       return new Response('Bad JSON', { status: 400 });
     }
 
-    const { subscription, title, message, gameId } = body;
-    if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
-      return new Response('Invalid subscription', { status: 400 });
-    }
-
     try {
-      const payload = JSON.stringify({ title, body: message, gameId });
-      const encrypted = await encryptPayload(payload, subscription);
+      // ── Store a subscription for a player ────────────────────────────────
+      if (body.action === 'subscribe') {
+        const { gameId, playerIdx, subscription } = body;
+        if (!gameId || playerIdx == null || !subscription?.endpoint) {
+          return new Response('Invalid', { status: 400, headers: CORS });
+        }
+        // Store for 30 days; re-registered on every app open if permission granted
+        await env.SUBS.put(`${gameId}:${playerIdx}`, JSON.stringify(subscription), {
+          expirationTtl: 60 * 60 * 24 * 30,
+        });
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { 'Content-Type': 'application/json', ...CORS },
+        });
+      }
 
-      const audience = new URL(subscription.endpoint).origin;
-      const jwt = await buildVapidJwt(audience, env.VAPID_PRIVATE_KEY_JWK);
+      // ── Send a push by gameId + playerIdx (looks up subscription from KV) ─
+      if (body.action === 'notify') {
+        const { gameId, playerIdx, title, message } = body;
+        if (!gameId || playerIdx == null) {
+          return new Response('Missing fields', { status: 400, headers: CORS });
+        }
+        const subJson = await env.SUBS.get(`${gameId}:${playerIdx}`);
+        if (!subJson) {
+          return new Response(JSON.stringify({ ok: false, reason: 'no_subscription' }), {
+            headers: { 'Content-Type': 'application/json', ...CORS },
+          });
+        }
+        return deliverPush(JSON.parse(subJson), title, message, gameId, env);
+      }
 
-      const pushRes = await fetch(subscription.endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `vapid t=${jwt},k=${env.VAPID_PUBLIC_KEY}`,
-          'Content-Type': 'application/octet-stream',
-          'Content-Encoding': 'aes128gcm',
-          'TTL': '86400',
-        },
-        body: encrypted,
-      });
+      // ── Legacy: subscription passed directly in body ──────────────────────
+      const { subscription, title, message, gameId } = body;
+      if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+        return new Response('Invalid subscription', { status: 400, headers: CORS });
+      }
+      return deliverPush(subscription, title, message, gameId, env);
 
-      return new Response(
-        JSON.stringify({ ok: pushRes.ok, status: pushRes.status }),
-        { headers: { 'Content-Type': 'application/json', ...CORS } },
-      );
     } catch (err) {
       return new Response(
         JSON.stringify({ ok: false, error: err.message }),

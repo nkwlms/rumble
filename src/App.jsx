@@ -56,12 +56,22 @@ async function subscribePush() {
   return sub.toJSON();
 }
 
-function sendPushNotification(subscription, title, body, gameId) {
-  if (!subscription || !PUSH_WORKER_URL) return;
+// Store subscription in CF Worker KV — no longer embedded in game state
+function registerPushSub(gameId, playerIdx, sub) {
+  if (!sub || !PUSH_WORKER_URL || gameId == null || playerIdx == null) return;
   fetch(PUSH_WORKER_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subscription, title, message: body, gameId }),
+    body: JSON.stringify({ action: 'subscribe', gameId, playerIdx, subscription: sub }),
+  }).catch(() => {});
+}
+
+function sendPushNotification(gameId, playerIdx, title, body) {
+  if (!PUSH_WORKER_URL || gameId == null || playerIdx == null) return;
+  fetch(PUSH_WORKER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'notify', gameId, playerIdx, title, message: body }),
   }).catch(() => {});
 }
 
@@ -384,7 +394,7 @@ export default function App() {
   useEffect(() => {
     if (mode !== 'online' || !gameId || !game) return;
     if (game.gameOver) return;
-    const needsPoll = game.status === 'waiting' || game.currentPlayer !== myPlayer || !game.pushSubs?.[1 - myPlayer];
+    const needsPoll = game.status === 'waiting' || game.currentPlayer !== myPlayer;
     if (!needsPoll) return;
 
     const id = setInterval(async () => {
@@ -395,11 +405,7 @@ export default function App() {
           state.currentPlayer !== game.currentPlayer ||
           state.status !== game.status ||
           state.gameOver !== game.gameOver;
-        if (changed) {
-          setGame(fromSyncState(state));
-        } else if (state.pushSubs) {
-          setGame(g => g ? { ...g, pushSubs: state.pushSubs } : g);
-        }
+        if (changed) setGame(fromSyncState(state));
       } catch {
         setSyncError(true);
       }
@@ -408,19 +414,12 @@ export default function App() {
     return () => clearInterval(id);
   }, [mode, gameId, game?.currentPlayer, game?.status, game?.gameOver, myPlayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // If permission is already granted (returning player), silently re-subscribe
+  // If permission is already granted (returning player), silently re-register with KV
   useEffect(() => {
     if (mode !== 'online' || myPlayer === null || !gameId || !PUSH_WORKER_URL) return;
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-    subscribePush().then(async sub => {
-      if (!sub) return;
-      if (game?.pushSubs?.[myPlayer]?.endpoint === sub.endpoint) return;
-      const latest = await fetchGame(gameId);
-      if (latest.error) return;
-      const pushSubs = [...(latest.pushSubs || [null, null])];
-      pushSubs[myPlayer] = sub;
-      saveGame(gameId, { ...latest, pushSubs }).catch(() => {});
-      setGame(g => g ? { ...g, pushSubs } : g);
+    subscribePush().then(sub => {
+      registerPushSub(gameId, myPlayer, sub);
     }).catch(() => {});
   }, [mode, myPlayer, gameId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -478,7 +477,7 @@ export default function App() {
       const id = randId(6);
       const secret = randId(16);
       const base = initGame();
-      const state = { ...toSyncState(base), secrets: [secret, null], status: 'waiting', names: [myName || null, null], pushSubs: [null, null] };
+      const state = { ...toSyncState(base), secrets: [secret, null], status: 'waiting', names: [myName || null, null] };
       await saveGame(id, state);
       localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 0, secret }));
       addGameToHistory(id);
@@ -520,13 +519,7 @@ export default function App() {
   async function enableNotifications() {
     const sub = await subscribePush();
     setNotifStatus(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
-    if (!sub || !gameId || myPlayer === null) return;
-    const latest = await fetchGame(gameId);
-    if (latest.error) return;
-    const pushSubs = [...(latest.pushSubs || [null, null])];
-    pushSubs[myPlayer] = sub;
-    saveGame(gameId, { ...latest, pushSubs }).catch(() => {});
-    setGame(g => g ? { ...g, pushSubs } : g);
+    registerPushSub(gameId, myPlayer, sub);
   }
 
   function syncGame(newGame) {
@@ -731,23 +724,10 @@ export default function App() {
     };
 
     setGame(newGame);
+    syncGame(newGame);
     if (mode === 'online' && !newGame.gameOver) {
       const oppIdx = (myPlayer + 1) % NUM_PLAYERS;
-      const myName = newGame.names?.[myPlayer] || 'Opponent';
-      // Fetch latest to get opponent's subscription, then save with merged pushSubs
-      fetchGame(gameId).then(latest => {
-        const mergedSubs = [
-          latest.pushSubs?.[0] ?? newGame.pushSubs?.[0],
-          latest.pushSubs?.[1] ?? newGame.pushSubs?.[1],
-        ];
-        syncGame({ ...newGame, pushSubs: mergedSubs });
-        sendPushNotification(mergedSubs[oppIdx], "It's your turn!", `${myName} just played`, gameId);
-      }).catch(() => {
-        syncGame(newGame);
-        sendPushNotification(newGame.pushSubs?.[oppIdx], "It's your turn!", `${myName} just played`, gameId);
-      });
-    } else {
-      syncGame(newGame);
+      sendPushNotification(gameId, oppIdx, "It's your turn!", `${newGame.names?.[myPlayer] || 'Opponent'} just played`);
     }
   }
 
@@ -800,22 +780,10 @@ export default function App() {
     };
 
     setGame(newGame);
+    syncGame(newGame);
     if (mode === 'online' && !newGame.gameOver) {
       const oppIdx = (myPlayer + 1) % NUM_PLAYERS;
-      const myName = newGame.names?.[myPlayer] || 'Opponent';
-      fetchGame(gameId).then(latest => {
-        const mergedSubs = [
-          latest.pushSubs?.[0] ?? newGame.pushSubs?.[0],
-          latest.pushSubs?.[1] ?? newGame.pushSubs?.[1],
-        ];
-        syncGame({ ...newGame, pushSubs: mergedSubs });
-        sendPushNotification(mergedSubs[oppIdx], "It's your turn!", `${myName} passed`, gameId);
-      }).catch(() => {
-        syncGame(newGame);
-        sendPushNotification(newGame.pushSubs?.[oppIdx], "It's your turn!", `${myName} passed`, gameId);
-      });
-    } else {
-      syncGame(newGame);
+      sendPushNotification(gameId, oppIdx, "It's your turn!", `${newGame.names?.[myPlayer] || 'Opponent'} passed`);
     }
   }
 
