@@ -533,8 +533,8 @@ export default function App() {
     setSyncing(true);
     try {
       const state = await fetchGame(id);
-      if (state.error === 'not_found') { alert(`Game "${id}" not found.`); return; }
-      if (state.secrets?.[1] !== null) { alert('This game already has two players.'); return; }
+      if (state.error || !state.secrets) { alert(`Game "${id}" not found.`); return; }
+      if (state.secrets[1] != null) { alert('This game already has two players.'); return; }
       const secret = randId(16);
       const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active', names: [state.names?.[0] ?? null, myName || null] };
       await saveGame(id, newState);
