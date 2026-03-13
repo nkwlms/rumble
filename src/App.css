@@ -6,7 +6,7 @@
 
 /* ── Reset ──────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { overflow-x: hidden; max-width: 100%; }
+html, body { overflow-x: hidden; max-width: 100%; touch-action: manipulation; }
 
 /* ── Tile number colors ─────────────────────────────────────────────────── */
 .c-red    { color: #c62828; }
@@ -841,30 +841,37 @@ html, body { overflow-x: hidden; max-width: 100%; }
   }
 }
 
-/* ── Install banner ──────────────────────────────────────────────────────── */
-.install-banner {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+/* ── Web gate ─────────────────────────────────────────────────────────────── */
+.web-gate__heading {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #e0e6f0;
+  text-align: center;
+}
+.web-gate__sub {
+  font-size: 0.85rem;
+  color: #8fa0b4;
+  text-align: center;
+  line-height: 1.5;
+}
+.web-gate__code-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: #0d1f35;
-  border-top: 1px solid #2e4a6c;
-  padding: 12px 16px;
-  z-index: 1000;
-  box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+  background: #0a1628;
+  border: 1px solid #2e4a6c;
+  border-radius: 10px;
+  padding: 10px 14px;
 }
-.install-banner__icon { font-size: 1.4rem; flex-shrink: 0; }
-.install-banner__text {
+.web-gate__code {
   flex: 1;
-  font-size: 0.82rem;
-  color: #c0cfe0;
-  line-height: 1.4;
+  font-size: 1.8rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: #e0e6f0;
+  font-family: monospace;
 }
-.install-banner__text strong { color: #e0e6f0; }
-.install-banner__btn {
+.web-gate__copy {
   background: #2563b0;
   color: #fff;
   border: none;
@@ -874,15 +881,22 @@ html, body { overflow-x: hidden; max-width: 100%; }
   font-weight: 700;
   cursor: pointer;
   flex-shrink: 0;
+  font-family: inherit;
 }
-.install-banner__btn:hover { background: #3578cc; }
-.install-banner__dismiss {
-  background: none;
-  border: none;
-  color: #4a5a6c;
-  font-size: 1rem;
-  cursor: pointer;
-  padding: 4px 6px;
-  flex-shrink: 0;
+.web-gate__copy:hover { background: #3578cc; }
+.web-gate__install-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
 }
-.install-banner__dismiss:hover { color: #8fa0b4; }
+.web-gate__step {
+  font-size: 0.88rem;
+  color: #8fa0b4;
+  padding: 8px 12px;
+  background: #0a1628;
+  border-radius: 8px;
+  line-height: 1.4;
+}
+.web-gate__step strong { color: #c0cfe0; }
+.web-gate__icon { font-size: 0.9rem; }

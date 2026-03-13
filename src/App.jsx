@@ -105,25 +105,57 @@ function Tile({ tile, size = 'board', selected = false, onClick, onDragStart }) 
   );
 }
 
-// ── Install banner ────────────────────────────────────────────────────────────
+// ── Web gate (shown in Safari / browser — not the installed PWA) ──────────────
 
-function InstallBanner({ isIOS, onInstall, onDismiss }) {
+function WebGate({ gameId, isIOS, installPrompt, onInstall }) {
+  const [copied, setCopied] = useState(false);
+
+  function copyCode() {
+    navigator.clipboard.writeText(gameId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
   return (
-    <div className="install-banner">
-      <div className="install-banner__icon">📲</div>
-      <div className="install-banner__text">
-        {isIOS
-          ? <>Tap <strong>Share</strong> → <strong>Add to Home Screen</strong> to install Rumble</>
-          : <>Add Rumble to your home screen for the best experience</>
-        }
-      </div>
-      {isIOS
-        ? <button className="install-banner__dismiss" onClick={onDismiss}>✕</button>
-        : <>
-            <button className="install-banner__btn" onClick={onInstall}>Add</button>
-            <button className="install-banner__dismiss" onClick={onDismiss}>✕</button>
+    <div className="app lobby">
+      <h1 className="title">RUMBLE</h1>
+      <div className="lobby-card">
+        {gameId ? (
+          <>
+            <div className="web-gate__heading">You've been invited to play!</div>
+            <div className="web-gate__sub">Open the Rumble app and enter this code to join:</div>
+            <div className="web-gate__code-row">
+              <div className="web-gate__code">{gameId}</div>
+              <button className="web-gate__copy" onClick={copyCode}>
+                {copied ? '✓ Copied' : 'Copy'}
+              </button>
+            </div>
+            <div className="lobby-divider">don't have the app yet?</div>
           </>
-      }
+        ) : (
+          <>
+            <div className="web-gate__heading">Rumble is a mobile app</div>
+            <div className="web-gate__sub">Install it to your home screen to play</div>
+            <div className="lobby-divider" />
+          </>
+        )}
+        {isIOS ? (
+          <div className="web-gate__install-steps">
+            <div className="web-gate__step">1. Tap <strong>Share</strong> in Safari <span className="web-gate__icon">⎙</span></div>
+            <div className="web-gate__step">2. Tap <strong>Add to Home Screen</strong></div>
+            <div className="web-gate__step">3. Open Rumble and {gameId ? 'enter the code above' : 'start playing'}</div>
+          </div>
+        ) : installPrompt ? (
+          <button className="btn btn--play lobby-btn" onClick={onInstall}>
+            Add Rumble to Home Screen
+          </button>
+        ) : (
+          <div className="web-gate__install-steps">
+            <div className="web-gate__step">Open this page in your browser and install it to your home screen to play</div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -220,26 +252,20 @@ function Lobby({ onNew, onJoin, onLocal, syncing, name, onNameChange, activeGame
 
 export default function App() {
   const urlGameId = new URLSearchParams(window.location.search).get('game');
-
-  // Save invite to localStorage so it survives "Add to Home Screen" on iOS.
-  // When the PWA launches at start_url (/rumble/) with no query param,
-  // we pick up the pending invite from localStorage instead.
-  if (urlGameId) localStorage.setItem('rumble_pending_invite', urlGameId);
-  const pendingInvite = !urlGameId ? localStorage.getItem('rumble_pending_invite') : null;
-  const effectiveGameId = urlGameId || pendingInvite;
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
 
   const [mode, setMode] = useState(() => {
-    if (effectiveGameId) return 'join-prompt';
+    if (urlGameId) return 'join-prompt';
     if (!SCRIPT_URL) return 'local';
     return 'lobby';
   });
 
   const [game, setGame] = useState(() => {
-    if (effectiveGameId || SCRIPT_URL) return null;
+    if (urlGameId || SCRIPT_URL) return null;
     return initGame();
   });
 
-  const [gameId, setGameId]     = useState(effectiveGameId);
+  const [gameId, setGameId]     = useState(urlGameId);
   const [myPlayer, setMyPlayer] = useState(null);
   const [myName, setMyName]     = useState(() => localStorage.getItem('rumble_name') || '');
 
@@ -266,32 +292,16 @@ export default function App() {
   const dragIdx = useRef(null);
   const [activeGames, setActiveGames] = useState(null);
 
-  // ── PWA install prompt ──────────────────────────────────────────────────────
+  // ── Install prompt (used by WebGate when rendered for non-PWA users) ─────────
   const [installPrompt, setInstallPrompt] = useState(null);
-  const [showInstallBanner, setShowInstallBanner] = useState(false);
-  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.navigator.standalone;
-  const installDismissed = localStorage.getItem('rumble_install_dismissed') === '1';
 
   useEffect(() => {
-    if (isStandalone || installDismissed) return;
+    if (isStandalone) return;
     const handler = e => { e.preventDefault(); setInstallPrompt(e); };
     window.addEventListener('beforeinstallprompt', handler);
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (isStandalone || installDismissed) return;
-    if (installPrompt || isIOS) {
-      const t = setTimeout(() => setShowInstallBanner(true), 2000);
-      return () => clearTimeout(t);
-    }
-  }, [installPrompt, isIOS]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function dismissInstall() {
-    setShowInstallBanner(false);
-    localStorage.setItem('rumble_install_dismissed', '1');
-  }
 
   async function triggerInstall() {
     if (installPrompt) {
@@ -299,7 +309,6 @@ export default function App() {
       const { outcome } = await installPrompt.userChoice;
       if (outcome === 'accepted') setInstallPrompt(null);
     }
-    dismissInstall();
   }
 
   // ── App badge (shows when it's your turn in an online game) ────────────────
@@ -366,7 +375,7 @@ export default function App() {
       if (stored) {
         const { player: p, secret } = JSON.parse(stored);
         if (state.secrets?.[p] === secret) {
-          localStorage.removeItem('rumble_pending_invite');
+
           setMyPlayer(p);
           setGame(fromSyncState(state));
           setGameId(id);
@@ -735,6 +744,12 @@ export default function App() {
     return groups;
   })();
 
+  // ── Render: Web gate (not running as installed PWA) ─────────────────────────
+
+  if (!isStandalone) {
+    return <WebGate gameId={urlGameId} isIOS={isIOS} installPrompt={installPrompt} onInstall={triggerInstall} />;
+  }
+
   // ── Render: Join prompt (arrived via share link) ────────────────────────────
 
   if (mode === 'join-prompt') {
@@ -763,7 +778,7 @@ export default function App() {
             Join Game
           </button>
           <button className="wild-picker__cancel" style={{ alignSelf: 'center' }}
-            onClick={() => { localStorage.removeItem('rumble_pending_invite'); window.history.pushState(null, '', window.location.pathname); setMode('lobby'); }}
+            onClick={() => { window.history.pushState(null, '', window.location.pathname); setMode('lobby'); }}
           >
             Cancel
           </button>
@@ -787,7 +802,6 @@ export default function App() {
           activeGames={activeGames}
           onResume={id => { window.location.assign(`${window.location.pathname}?game=${id}`); }}
         />
-        {showInstallBanner && <InstallBanner isIOS={isIOS} onInstall={triggerInstall} onDismiss={dismissInstall} />}
       </>
     );
   }
@@ -1083,7 +1097,6 @@ export default function App() {
       </div>
 
     </div>
-    {showInstallBanner && <InstallBanner isIOS={isIOS} onInstall={triggerInstall} onDismiss={dismissInstall} />}
     </>
   );
 }
