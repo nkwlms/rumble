@@ -323,6 +323,9 @@ export default function App() {
   const [syncError, setSyncError] = useState(false);
   const [copyDone, setCopyDone] = useState(false);
 
+  const [notifStatus, setNotifStatus] = useState(
+    () => (typeof Notification !== 'undefined' ? Notification.permission : 'unsupported')
+  );
   const [showRules, setShowRules] = useState(false);
   const [wildPicker, setWildPicker] = useState(null);
   const [showBag, setShowBag]   = useState(false);
@@ -401,14 +404,13 @@ export default function App() {
     return () => clearInterval(id);
   }, [mode, gameId, game?.currentPlayer, game?.status, game?.gameOver, myPlayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Subscribe to push when entering an online game (once per game session)
+  // If permission is already granted (returning player), silently re-subscribe
   useEffect(() => {
     if (mode !== 'online' || myPlayer === null || !gameId || !PUSH_WORKER_URL) return;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     subscribePush().then(async sub => {
       if (!sub) return;
-      // Skip if our subscription is already current
       if (game?.pushSubs?.[myPlayer]?.endpoint === sub.endpoint) return;
-      // Fetch latest state to avoid overwriting opponent's sub
       const latest = await fetchGame(gameId);
       if (latest.error) return;
       const pushSubs = [...(latest.pushSubs || [null, null])];
@@ -509,6 +511,18 @@ export default function App() {
     } finally {
       setSyncing(false);
     }
+  }
+
+  async function enableNotifications() {
+    const sub = await subscribePush();
+    setNotifStatus(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
+    if (!sub || !gameId || myPlayer === null) return;
+    const latest = await fetchGame(gameId);
+    if (latest.error) return;
+    const pushSubs = [...(latest.pushSubs || [null, null])];
+    pushSubs[myPlayer] = sub;
+    saveGame(gameId, { ...latest, pushSubs }).catch(() => {});
+    setGame(g => g ? { ...g, pushSubs } : g);
   }
 
   function syncGame(newGame) {
@@ -1020,6 +1034,11 @@ export default function App() {
               title={syncing ? 'Saving…' : syncError ? 'Sync error' : 'Synced'}
             />
           </div>
+        )}
+        {mode === 'online' && PUSH_WORKER_URL && notifStatus === 'default' && (
+          <button className="notif-btn" onClick={enableNotifications}>
+            🔔 Enable turn notifications
+          </button>
         )}
 
         {showRules && (

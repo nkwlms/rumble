@@ -654,6 +654,20 @@ html, body { overflow-x: hidden; max-width: 100%; touch-action: manipulation; }
 }
 .game-id-bar strong { color: #8fa0b4; font-family: monospace; letter-spacing: 2px; }
 
+.notif-btn {
+  background: none;
+  border: 1px solid #2e4a6c;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  color: #8fa0b4;
+  cursor: pointer;
+  font-family: inherit;
+  width: 100%;
+  text-align: left;
+}
+.notif-btn:hover { background: #0d1f35; color: #c0cfe0; }
+
 .sync-dot {
   width: 8px;
   height: 8px;
