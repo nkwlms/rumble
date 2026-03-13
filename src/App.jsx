@@ -105,7 +105,7 @@ function Tile({ tile, size = 'board', selected = false, onClick, onDragStart }) 
 
 // ── Lobby screen ──────────────────────────────────────────────────────────────
 
-function Lobby({ onNew, onJoin, onLocal, syncing, name, onNameChange }) {
+function Lobby({ onNew, onJoin, onLocal, syncing, name, onNameChange, activeGames, onResume }) {
   const [joinInput, setJoinInput] = useState('');
   return (
     <div className="app lobby">
@@ -151,6 +151,30 @@ function Lobby({ onNew, onJoin, onLocal, syncing, name, onNameChange }) {
         <button className="btn btn--new lobby-btn" onClick={onLocal}>
           Play Locally (same device)
         </button>
+        {activeGames && activeGames.length > 0 && (
+          <>
+            <div className="lobby-divider">resume a game</div>
+            {activeGames.map(({ id, state, myPlayer: myP }) => {
+              const opIdx = myP === 0 ? 1 : 0;
+              const opName = state.names?.[opIdx] || 'Opponent';
+              const isMyTurn = !state.gameOver && state.currentPlayer === myP;
+              return (
+                <button key={id} className="active-game-btn" onClick={() => onResume(id)}>
+                  <span className="active-game-id">{id}</span>
+                  <span className="active-game-meta">
+                    <span className="active-game-vs">vs {opName}</span>
+                    <span className={`active-game-turn${isMyTurn ? ' active-game-turn--mine' : ''}`}>
+                      {state.gameOver ? 'finished' : isMyTurn ? 'your turn' : "their turn"}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </>
+        )}
+        {activeGames === null && SCRIPT_URL && (
+          <div className="loading-msg" style={{ padding: '4px', fontSize: '0.8rem' }}>Loading games…</div>
+        )}
       </div>
     </div>
   );
@@ -162,7 +186,7 @@ export default function App() {
   const urlGameId = new URLSearchParams(window.location.search).get('game');
 
   const [mode, setMode] = useState(() => {
-    if (urlGameId) return 'loading';
+    if (urlGameId) return 'join-prompt';
     if (!SCRIPT_URL) return 'local';
     return 'lobby';
   });
@@ -180,6 +204,14 @@ export default function App() {
     setMyName(n);
     localStorage.setItem('rumble_name', n);
   }
+
+  function addGameToHistory(id) {
+    const games = JSON.parse(localStorage.getItem('rumble_games') || '[]');
+    if (!games.includes(id)) {
+      localStorage.setItem('rumble_games', JSON.stringify([id, ...games]));
+    }
+  }
+
   const [syncing, setSyncing]   = useState(false);
   const [syncError, setSyncError] = useState(false);
   const [copyDone, setCopyDone] = useState(false);
@@ -189,11 +221,27 @@ export default function App() {
   const [showBag, setShowBag]   = useState(false);
   const [dragOver, setDragOver] = useState(null);
   const dragIdx = useRef(null);
+  const [activeGames, setActiveGames] = useState(null);
 
-  // Load online game from URL param on mount
+  // (join-prompt handles the URL game load after name entry)
+
+  // Fetch active games when returning to lobby
   useEffect(() => {
-    if (urlGameId) loadOnlineGame(urlGameId);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (mode !== 'lobby' || !SCRIPT_URL) { if (mode === 'lobby') setActiveGames([]); return; }
+    const ids = JSON.parse(localStorage.getItem('rumble_games') || '[]');
+    if (ids.length === 0) { setActiveGames([]); return; }
+    setActiveGames(null); // loading
+    Promise.all(ids.map(async id => {
+      try {
+        const stored = localStorage.getItem(`rumble_${id}`);
+        if (!stored) return null;
+        const { player: myP } = JSON.parse(stored);
+        const state = await fetchGame(id);
+        if (state.error) return null;
+        return { id, state, myPlayer: myP };
+      } catch { return null; }
+    })).then(results => setActiveGames(results.filter(Boolean)));
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll for updates when it's opponent's turn or waiting for them to join
   useEffect(() => {
@@ -246,6 +294,7 @@ export default function App() {
         const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active', names: [state.names?.[0] ?? null, joinerName || null] };
         await saveGame(id, newState);
         localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 1, secret }));
+        addGameToHistory(id);
         setMyPlayer(1);
         setGame(fromSyncState(newState));
         setGameId(id);
@@ -272,6 +321,7 @@ export default function App() {
       const state = { ...toSyncState(base), secrets: [secret, null], status: 'waiting', names: [myName || null, null] };
       await saveGame(id, state);
       localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 0, secret }));
+      addGameToHistory(id);
       window.history.pushState(null, '', `?game=${id}`);
       setGameId(id);
       setMyPlayer(0);
@@ -294,6 +344,7 @@ export default function App() {
       const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active', names: [state.names?.[0] ?? null, myName || null] };
       await saveGame(id, newState);
       localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 1, secret }));
+      addGameToHistory(id);
       window.history.pushState(null, '', `?game=${id}`);
       setGameId(id);
       setMyPlayer(1);
@@ -336,7 +387,7 @@ export default function App() {
 
   function copyShareLink() {
     const url = `${window.location.origin}${window.location.pathname}?game=${gameId}`;
-    navigator.clipboard.writeText(url).then(() => {
+    navigator.clipboard.writeText(`Let's play Rumble: ${url}`).then(() => {
       setCopyDone(true);
       setTimeout(() => setCopyDone(false), 2000);
     });
@@ -583,6 +634,43 @@ export default function App() {
     return groups;
   })();
 
+  // ── Render: Join prompt (arrived via share link) ────────────────────────────
+
+  if (mode === 'join-prompt') {
+    return (
+      <div className="app lobby">
+        <h1 className="title">RUMBLE</h1>
+        <div className="lobby-card">
+          <div className="lobby-divider" style={{ fontSize: '0.9rem', color: '#8fa0b4' }}>
+            You've been invited to a game
+          </div>
+          <input
+            className="lobby-input lobby-name-input"
+            placeholder="Your name"
+            value={myName}
+            onChange={e => saveName(e.target.value)}
+            maxLength={20}
+            autoFocus
+            onKeyDown={e => {
+              if (e.key === 'Enter') { setMode('loading'); loadOnlineGame(urlGameId); }
+            }}
+          />
+          <button
+            className="btn btn--play lobby-btn"
+            onClick={() => { setMode('loading'); loadOnlineGame(urlGameId); }}
+          >
+            Join Game
+          </button>
+          <button className="wild-picker__cancel" style={{ alignSelf: 'center' }}
+            onClick={() => { window.history.pushState(null, '', window.location.pathname); setMode('lobby'); }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // ── Render: Lobby ───────────────────────────────────────────────────────────
 
   if (mode === 'lobby') {
@@ -594,6 +682,8 @@ export default function App() {
         syncing={syncing}
         name={myName}
         onNameChange={saveName}
+        activeGames={activeGames}
+        onResume={id => { window.location.assign(`${window.location.pathname}?game=${id}`); }}
       />
     );
   }
@@ -780,35 +870,29 @@ export default function App() {
 
         <div className="controls">
           {isMyTurn ? (
-            <>
-              <div className="rack-area">
-                <div className="rack-label">
-                  {mode === 'online' ? 'Your Rack' : `Player ${game.currentPlayer + 1}'s Rack`}
-                  {Object.keys(game.pending).length > 0 && (
-                    <span className="pending-count"> · {Object.keys(game.pending).length} on board</span>
-                  )}
-                </div>
-                <div className="rack">
-                  {rack.map((tile, i) => (
-                    <Tile
-                      key={tile.id}
-                      tile={tile}
-                      size="rack"
-                      selected={game.selectedIdx === i}
-                      onClick={() => selectRackTile(i)}
-                      onDragStart={(e) => handleDragStart(e, i)}
-                    />
-                  ))}
-                  {rack.length === 0 && !game.gameOver && (
-                    <span className="rack-empty">— empty —</span>
-                  )}
-                </div>
+            <div className="rack-area">
+              <div className="rack-label">
+                {mode === 'online' ? 'Your Rack' : `Player ${game.currentPlayer + 1}'s Rack`}
+                {Object.keys(game.pending).length > 0 && (
+                  <span className="pending-count"> · {Object.keys(game.pending).length} on board</span>
+                )}
               </div>
-              {previewScore !== null && (
-                <div className="score-preview">+{previewScore} pts</div>
-              )}
-              <button className="btn btn--play" onClick={play} disabled={game.gameOver || syncing}>▶ Play</button>
-            </>
+              <div className="rack">
+                {rack.map((tile, i) => (
+                  <Tile
+                    key={tile.id}
+                    tile={tile}
+                    size="rack"
+                    selected={game.selectedIdx === i}
+                    onClick={() => selectRackTile(i)}
+                    onDragStart={(e) => handleDragStart(e, i)}
+                  />
+                ))}
+                {rack.length === 0 && !game.gameOver && (
+                  <span className="rack-empty">— empty —</span>
+                )}
+              </div>
+            </div>
           ) : (
             <div className="rack-area opponent-wait">
               <div className="rack-label">
@@ -818,7 +902,15 @@ export default function App() {
               {syncError && <div className="sync-err-msg">Connection issue — retrying…</div>}
             </div>
           )}
+        </div>
 
+        <div className="action-bar">
+          {isMyTurn && previewScore !== null && (
+            <div className="score-preview">+{previewScore} pts</div>
+          )}
+          {isMyTurn && (
+            <button className="btn btn--play action-bar__play" onClick={play} disabled={game.gameOver || syncing}>▶ Play</button>
+          )}
           <div className="buttons">
             {isMyTurn && (
               <button className="btn btn--recall" onClick={recallAll} disabled={game.gameOver}>↩ Recall</button>
