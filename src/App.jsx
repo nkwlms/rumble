@@ -487,7 +487,7 @@ export default function App() {
       if (state.status === 'waiting' && state.secrets?.[1] === null) {
         const secret = randId(16);
         const joinerName = localStorage.getItem('rumble_name') || '';
-        const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active', names: [state.names?.[0] ?? null, joinerName || null] };
+        const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active', names: [state.names?.[0] ?? null, joinerName || null], currentPlayer: 1 };
         await saveGame(id, newState);
         localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 1, secret }));
         addGameToHistory(id);
@@ -539,7 +539,7 @@ export default function App() {
       if (state.error || !state.secrets) { alert(`Game "${id}" not found.`); return; }
       if (state.secrets[1] != null) { alert('This game already has two players.'); return; }
       const secret = randId(16);
-      const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active', names: [state.names?.[0] ?? null, myName || null] };
+      const newState = { ...state, secrets: [state.secrets[0], secret], status: 'active', names: [state.names?.[0] ?? null, myName || null], currentPlayer: 1 };
       await saveGame(id, newState);
       localStorage.setItem(`rumble_${id}`, JSON.stringify({ player: 1, secret }));
       addGameToHistory(id);
